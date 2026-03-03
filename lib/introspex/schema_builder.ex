@@ -5,6 +5,8 @@ defmodule Introspex.SchemaBuilder do
 
   alias Introspex.Postgres.TypeMapper
 
+  @association_kinds [:belongs_to, :has_many, :has_one, :many_to_many]
+
   @doc """
   Builds a complete schema module from table metadata.
   """
@@ -23,6 +25,8 @@ defmodule Introspex.SchemaBuilder do
     skip_timestamps = Keyword.get(opts, :skip_timestamps, false)
     _app_name = Keyword.get(opts, :app_name, "MyApp")
     module_prefix = Keyword.get(opts, :module_prefix)
+
+    relationships = normalize_relationships(relationships, opts)
 
     # Auto-detect if primary key is UUID
     primary_key_info = detect_primary_key_type(columns, primary_keys)
@@ -89,6 +93,189 @@ defmodule Introspex.SchemaBuilder do
       table_type,
       table.comment
     )
+  end
+
+  defp normalize_relationships(relationships, opts) do
+    naming_style =
+      parse_association_naming(Keyword.get(opts, :association_naming, "table_plus_stem"))
+
+    rewrite_all? = Keyword.get(opts, :association_naming_apply) == "always"
+
+    all_entries =
+      for kind <- @association_kinds,
+          assoc <- Map.get(relationships || %{}, kind, []),
+          do: %{kind: kind, assoc: assoc}
+
+    duplicates =
+      all_entries
+      |> Enum.map(& &1.assoc.field)
+      |> Enum.frequencies()
+      |> Enum.filter(fn {_, count} -> count > 1 end)
+      |> Map.new()
+
+    fixed_fields =
+      if rewrite_all?,
+        do: MapSet.new(),
+        else:
+          for(e <- all_entries, !Map.has_key?(duplicates, e.assoc.field), do: e.assoc.field)
+          |> MapSet.new()
+
+    {rewritten_entries, _} =
+      Enum.map_reduce(all_entries, fixed_fields, fn entry, taken ->
+        is_duplicate = Map.has_key?(duplicates, entry.assoc.field)
+
+        new_field =
+          if rewrite_all? or is_duplicate do
+            entry
+            |> generate_association_field(naming_style)
+            |> ensure_unique_field(taken)
+          else
+            entry.assoc.field
+          end
+
+        {%{entry | assoc: %{entry.assoc | field: new_field}}, MapSet.put(taken, new_field)}
+      end)
+
+    rewritten_entries
+    |> Enum.group_by(& &1.kind, & &1.assoc)
+    |> ensure_relationship_keys()
+  end
+
+  defp ensure_relationship_keys(map) do
+    Map.merge(Map.new(@association_kinds, &{&1, []}), map)
+  end
+
+  defp ensure_unique_field(field, taken, counter \\ 1) do
+    candidate = if counter == 1, do: field, else: String.to_atom("#{field}_#{counter}")
+
+    if MapSet.member?(taken, candidate) do
+      ensure_unique_field(field, taken, counter + 1)
+    else
+      candidate
+    end
+  end
+
+  defp generate_association_field(entry, :constraint) do
+    case entry.assoc.constraint_name do
+      nil -> generate_association_field(entry, :table_plus_stem)
+      name -> to_sanitized_atom(name)
+    end
+  end
+
+  defp generate_association_field(entry, mode) when mode in [:fk_stem, :table_plus_stem] do
+    %{assoc: assoc, kind: kind} = entry
+
+    table_name = assoc_table_name(assoc)
+    target_singular = singularize(table_name)
+    target_plural = table_name
+    fk_stem = association_fk_stem(assoc)
+    join_stem = association_join_stem(assoc) || fk_stem
+
+    generated =
+      case {mode, kind} do
+        {:fk_stem, :belongs_to} ->
+          fk_stem
+
+        {:table_plus_stem, :belongs_to} ->
+          combine_name_parts(target_singular, fk_stem)
+
+        {_, :has_one} ->
+          combine_name_parts(target_singular, fk_stem)
+
+        {_, :has_many} ->
+          combine_name_parts(target_plural, fk_stem)
+
+        {_, :many_to_many} ->
+          suffix = dedupe_leading_table_prefix(join_stem, target_plural)
+          combine_name_parts(target_plural, suffix)
+      end
+
+    to_sanitized_atom(generated)
+  end
+
+  defp to_sanitized_atom(value) do
+    value
+    |> sanitize_identifier()
+    |> String.to_atom()
+  end
+
+  defp association_fk_stem(assoc) do
+    assoc
+    |> Map.get(:foreign_key, :assoc)
+    |> to_string()
+    |> String.replace_suffix("_id", "")
+    |> sanitize_identifier()
+  end
+
+  defp association_join_stem(assoc) do
+    case Map.get(assoc, :join_through) do
+      nil -> nil
+      join_through -> sanitize_identifier(join_through)
+    end
+  end
+
+  defp dedupe_leading_table_prefix(stem, target_table) do
+    normalized_stem = sanitize_identifier(stem)
+    normalized_target = sanitize_identifier(target_table)
+    prefix = normalized_target <> "_"
+
+    if String.starts_with?(normalized_stem, prefix) do
+      trimmed = String.replace_prefix(normalized_stem, prefix, "")
+
+      if trimmed == "" do
+        normalized_stem
+      else
+        trimmed
+      end
+    else
+      normalized_stem
+    end
+  end
+
+  defp assoc_table_name(assoc) do
+    assoc
+    |> Map.get(:table, Map.get(assoc, :field, :assoc))
+    |> to_string()
+    |> Macro.underscore()
+  end
+
+  defp combine_name_parts(left, ""), do: left
+  defp combine_name_parts(left, left), do: left
+  defp combine_name_parts(left, right), do: "#{left}_#{right}"
+
+  defp sanitize_identifier(identifier) do
+    identifier
+    |> to_string()
+    |> String.replace(~r/[^a-zA-Z0-9_]/u, "_")
+    |> String.replace(~r/_+/u, "_")
+    |> String.trim("_")
+    |> String.downcase()
+    |> case do
+      "" ->
+        "assoc"
+
+      normalized ->
+        if String.match?(normalized, ~r/^\d/u) do
+          "assoc_#{normalized}"
+        else
+          normalized
+        end
+    end
+  end
+
+  defp parse_association_naming("fk_stem"), do: :fk_stem
+  defp parse_association_naming("table_plus_stem"), do: :table_plus_stem
+  defp parse_association_naming("constraint"), do: :constraint
+
+  defp singularize(value) do
+    cond do
+      String.ends_with?(value, "ies") -> String.replace_suffix(value, "ies", "y")
+      String.ends_with?(value, "ses") -> String.replace_suffix(value, "ses", "s")
+      String.ends_with?(value, "ches") -> String.replace_suffix(value, "ches", "ch")
+      String.ends_with?(value, "xes") -> String.replace_suffix(value, "xes", "x")
+      String.ends_with?(value, "s") -> String.replace_suffix(value, "s", "")
+      true -> value
+    end
   end
 
   defp build_module(

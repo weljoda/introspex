@@ -31,6 +31,26 @@ defmodule Mix.Tasks.Ecto.Gen.Schema do
     * `--context` - Phoenix context name for organizing related schemas
     * `--context-tables` - comma-separated list of tables to include in the context (only these tables will be generated)
     * `--path` - custom path segment(s) to insert in the output directory (e.g., "queries" results in lib/app_name/queries/...)
+    * `--association-naming` - association naming strategy: fk_stem, table_plus_stem, constraint (default: table_plus_stem)
+    * `--association-naming-apply` - when to apply naming strategy: duplicates_only, always (default: duplicates_only)
+
+  ## Association Naming
+
+  Introspex can disambiguate association field names when multiple relationships would otherwise
+  produce duplicates.
+
+  Strategies:
+
+    * `fk_stem` - uses role stems from foreign key names (e.g. `creator_id` -> `:creator`)
+    * `table_plus_stem` - combines target table and role stem (default)
+    * `constraint` - uses foreign key constraint names when available
+
+  Apply modes:
+
+    * `duplicates_only` - only rename when collisions occur (default)
+    * `always` - always apply the selected strategy
+
+  Collision detection is global across `belongs_to`, `has_many`, `has_one`, and `many_to_many`.
 
   """
 
@@ -53,7 +73,9 @@ defmodule Mix.Tasks.Ecto.Gen.Schema do
     dry_run: :boolean,
     context: :string,
     context_tables: :string,
-    path: :string
+    path: :string,
+    association_naming: :string,
+    association_naming_apply: :string
   ]
 
   @impl Mix.Task
@@ -61,6 +83,7 @@ defmodule Mix.Tasks.Ecto.Gen.Schema do
     Mix.Task.run("app.start")
 
     {opts, _} = OptionParser.parse!(args, switches: @switches)
+    validate_association_naming_opts!(opts)
 
     repo = get_repo!(opts)
     ensure_repo_started!(repo)
@@ -190,7 +213,9 @@ defmodule Mix.Tasks.Ecto.Gen.Schema do
       skip_timestamps: Keyword.get(opts, :no_timestamps, false),
       skip_changesets: Keyword.get(opts, :no_changesets, false),
       app_name: get_app_name(opts),
-      module_prefix: module_prefix
+      module_prefix: module_prefix,
+      association_naming: Keyword.get(opts, :association_naming, "table_plus_stem"),
+      association_naming_apply: Keyword.get(opts, :association_naming_apply, "duplicates_only")
     ]
 
     schema_content = SchemaBuilder.build_schema(table_data, module_name, builder_opts)
@@ -221,6 +246,26 @@ defmodule Mix.Tasks.Ecto.Gen.Schema do
 
       repo_string ->
         Module.concat([repo_string])
+    end
+  end
+
+  defp validate_association_naming_opts!(opts) do
+    association_naming = Keyword.get(opts, :association_naming, "table_plus_stem")
+    association_naming_apply = Keyword.get(opts, :association_naming_apply, "duplicates_only")
+
+    allowed_naming = ["fk_stem", "table_plus_stem", "constraint"]
+    allowed_apply = ["duplicates_only", "always"]
+
+    unless association_naming in allowed_naming do
+      Mix.raise(
+        "Invalid --association-naming value: #{association_naming}. Allowed values: #{Enum.join(allowed_naming, ", ")}"
+      )
+    end
+
+    unless association_naming_apply in allowed_apply do
+      Mix.raise(
+        "Invalid --association-naming-apply value: #{association_naming_apply}. Allowed values: #{Enum.join(allowed_apply, ", ")}"
+      )
     end
   end
 

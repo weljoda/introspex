@@ -118,6 +118,62 @@ mix ecto.gen.schema --repo MyApp.Repo --path queries --context Accounts --contex
 - `--context` - Phoenix context name for organizing related schemas
 - `--context-tables` - Comma-separated list of tables to include in the context (when specified, only these tables will be generated)
 - `--path` - Custom path segment(s) to insert in the output directory (e.g., "queries" results in lib/app_name/queries/...)
+- `--association-naming` - Association naming strategy: `fk_stem`, `table_plus_stem`, `constraint` (default: `table_plus_stem`)
+- `--association-naming-apply` - When to apply naming strategy: `duplicates_only`, `always` (default: `duplicates_only`)
+
+## Association Naming
+
+When multiple associations would generate the same field name, Introspex disambiguates them
+using the configured strategy.
+
+### Strategies (`--association-naming`)
+
+- `table_plus_stem` (default)
+  - Combines target table name and role stem.
+  - Example: `creator_id` and `assignee_id` to `users` become `:user_creator` and `:user_assignee`.
+- `fk_stem`
+  - Uses the foreign-key role stem directly when possible.
+  - Example: `creator_id` and `assignee_id` become `:creator` and `:assignee`.
+- `constraint`
+  - Uses foreign key constraint names.
+  - Example: `tickets_creator_id_fkey` becomes `:tickets_creator_id_fkey`.
+  - Falls back to `table_plus_stem` when constraint metadata is unavailable.
+
+### Apply Modes (`--association-naming-apply`)
+
+- `duplicates_only` (default)
+  - Keeps original names unless a collision is detected.
+  - Lowest churn for existing schemas.
+- `always`
+  - Always applies the selected strategy, even when there is no collision.
+  - Useful if you want one consistent naming style everywhere.
+
+### Cross-Type Collisions
+
+Collisions are resolved across all association types in a schema (`belongs_to`, `has_many`,
+`has_one`, `many_to_many`), not only within one type.
+
+Example:
+
+```elixir
+has_many :general_document, MyApp.GeneralDocument, foreign_key: :place_of_first_edition_address_id
+many_to_many :general_document, MyApp.GeneralDocument, join_through: "general_document_place_of_record"
+```
+
+will be disambiguated into unique names.
+
+### Many-to-Many Join Prefix Dedupe
+
+For `many_to_many`, Introspex removes duplicated leading table tokens from join-derived suffixes.
+
+Example:
+
+```elixir
+many_to_many :general_document_place_of_record, MyApp.GeneralDocument,
+  join_through: "general_document_place_of_record"
+```
+
+instead of repeating `general_document` twice in the field name.
 
 ## Example Output
 

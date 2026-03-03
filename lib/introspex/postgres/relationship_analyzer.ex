@@ -32,6 +32,7 @@ defmodule Introspex.Postgres.RelationshipAnalyzer do
           field: singularize(fk.foreign_table),
           table: fk.foreign_table,
           foreign_key: String.to_atom(fk.column_name),
+          constraint_name: fk.constraint_name,
           references: String.to_atom(fk.foreign_column),
           on_update: fk.on_update,
           on_delete: fk.on_delete
@@ -64,7 +65,8 @@ defmodule Introspex.Postgres.RelationshipAnalyzer do
             %{
               field: pluralize(other_table.name),
               table: other_table.name,
-              foreign_key: String.to_atom(fk.column_name)
+              foreign_key: String.to_atom(fk.column_name),
+              constraint_name: fk.constraint_name
             }
           end
         end)
@@ -107,6 +109,7 @@ defmodule Introspex.Postgres.RelationshipAnalyzer do
             %{
               field: pluralize(other_fk.foreign_table),
               table: other_fk.foreign_table,
+              constraint_name: other_fk.constraint_name,
               join_through: join_table.name,
               join_keys: [
                 {String.to_atom(hd(our_fks).column_name), String.to_atom("id")},

@@ -54,6 +54,28 @@ defmodule Mix.Tasks.Ecto.Gen.SchemaTest do
         Schema.run(["--table", "users"])
       end
     end
+
+    test "raises error for invalid association naming strategy" do
+      assert_raise Mix.Error, ~r/Invalid --association-naming value/, fn ->
+        Schema.run([
+          "--repo",
+          "Mix.Tasks.Ecto.Gen.SchemaTest.TestRepo",
+          "--association-naming",
+          "invalid"
+        ])
+      end
+    end
+
+    test "raises error for invalid association naming apply mode" do
+      assert_raise Mix.Error, ~r/Invalid --association-naming-apply value/, fn ->
+        Schema.run([
+          "--repo",
+          "Mix.Tasks.Ecto.Gen.SchemaTest.TestRepo",
+          "--association-naming-apply",
+          "invalid"
+        ])
+      end
+    end
   end
 
   describe "parse_opts/1" do
@@ -80,7 +102,11 @@ defmodule Mix.Tasks.Ecto.Gen.SchemaTest do
         "--context-tables",
         "users,profiles",
         "--path",
-        "queries"
+        "queries",
+        "--association-naming",
+        "fk_stem",
+        "--association-naming-apply",
+        "always"
       ]
 
       switches = [
@@ -97,7 +123,9 @@ defmodule Mix.Tasks.Ecto.Gen.SchemaTest do
         dry_run: :boolean,
         context: :string,
         context_tables: :string,
-        path: :string
+        path: :string,
+        association_naming: :string,
+        association_naming_apply: :string
       ]
 
       {opts, _, _} = OptionParser.parse(args, switches: switches)
@@ -116,6 +144,8 @@ defmodule Mix.Tasks.Ecto.Gen.SchemaTest do
       assert opts[:context] == "Accounts"
       assert opts[:context_tables] == "users,profiles"
       assert opts[:path] == "queries"
+      assert opts[:association_naming] == "fk_stem"
+      assert opts[:association_naming_apply] == "always"
     end
 
     test "parses context options separately" do

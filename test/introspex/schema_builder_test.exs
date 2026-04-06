@@ -1126,6 +1126,297 @@ defmodule Introspex.SchemaBuilderTest do
       assert result =~ "# field :metadata"
     end
 
+    test "renames cross-type duplicate association names by default" do
+      table_info = %{
+        table: %{name: "address", type: :table, comment: nil},
+        columns: [
+          %{
+            name: "id",
+            data_type: "uuid",
+            not_null: true,
+            default: "gen_random_uuid()",
+            comment: nil,
+            position: 1,
+            enum_values: nil
+          }
+        ],
+        primary_keys: ["id"],
+        relationships: %{
+          belongs_to: [],
+          has_many: [
+            %{
+              field: :general_document,
+              table: "general_document",
+              foreign_key: :place_of_first_edition_address_id
+            }
+          ],
+          has_one: [],
+          many_to_many: [
+            %{
+              field: :general_document,
+              table: "general_document",
+              join_through: "general_document_place_of_record"
+            }
+          ]
+        },
+        unique_constraints: [],
+        check_constraints: [],
+        table_type: :table
+      }
+
+      result = SchemaBuilder.build_schema(table_info, "MyApp.Address")
+
+      assert result =~
+               "has_many :general_document_place_of_first_edition_address, GeneralDocument, foreign_key: :place_of_first_edition_address_id"
+
+      assert result =~
+               "many_to_many :general_document_place_of_record, GeneralDocument, join_through: \"general_document_place_of_record\""
+    end
+
+    test "keeps non-conflicting association names when apply mode is duplicates_only" do
+      table_info = %{
+        table: %{name: "address", type: :table, comment: nil},
+        columns: [
+          %{
+            name: "id",
+            data_type: "uuid",
+            not_null: true,
+            default: "gen_random_uuid()",
+            comment: nil,
+            position: 1,
+            enum_values: nil
+          }
+        ],
+        primary_keys: ["id"],
+        relationships: %{
+          belongs_to: [],
+          has_many: [
+            %{field: :events, table: "events", foreign_key: :location_id}
+          ],
+          has_one: [],
+          many_to_many: [
+            %{
+              field: :document_versions,
+              table: "document_versions",
+              join_through: "document_version_location"
+            }
+          ]
+        },
+        unique_constraints: [],
+        check_constraints: [],
+        table_type: :table
+      }
+
+      result = SchemaBuilder.build_schema(table_info, "MyApp.Address")
+
+      assert result =~ "has_many :events, Events, foreign_key: :location_id"
+
+      assert result =~
+               "many_to_many :document_versions, DocumentVersions, join_through: \"document_version_location\""
+    end
+
+    test "always apply mode rewrites even non-conflicting names" do
+      table_info = %{
+        table: %{name: "events", type: :table, comment: nil},
+        columns: [
+          %{
+            name: "id",
+            data_type: "uuid",
+            not_null: true,
+            default: "gen_random_uuid()",
+            comment: nil,
+            position: 1,
+            enum_values: nil
+          },
+          %{
+            name: "creator_id",
+            data_type: "uuid",
+            not_null: true,
+            default: nil,
+            comment: nil,
+            position: 2,
+            enum_values: nil
+          }
+        ],
+        primary_keys: ["id"],
+        relationships: %{
+          belongs_to: [
+            %{field: :user, table: "users", foreign_key: :creator_id, references: :id}
+          ],
+          has_many: [],
+          has_one: [],
+          many_to_many: []
+        },
+        unique_constraints: [],
+        check_constraints: [],
+        table_type: :table
+      }
+
+      result =
+        SchemaBuilder.build_schema(table_info, "MyApp.Event", association_naming_apply: "always")
+
+      assert result =~ "belongs_to :user_creator, Users, foreign_key: :creator_id"
+    end
+
+    test "fk_stem strategy disambiguates duplicate belongs_to associations" do
+      table_info = %{
+        table: %{name: "tickets", type: :table, comment: nil},
+        columns: [
+          %{
+            name: "id",
+            data_type: "uuid",
+            not_null: true,
+            default: "gen_random_uuid()",
+            comment: nil,
+            position: 1,
+            enum_values: nil
+          },
+          %{
+            name: "creator_id",
+            data_type: "uuid",
+            not_null: true,
+            default: nil,
+            comment: nil,
+            position: 2,
+            enum_values: nil
+          },
+          %{
+            name: "assignee_id",
+            data_type: "uuid",
+            not_null: false,
+            default: nil,
+            comment: nil,
+            position: 3,
+            enum_values: nil
+          }
+        ],
+        primary_keys: ["id"],
+        relationships: %{
+          belongs_to: [
+            %{field: :user, table: "users", foreign_key: :creator_id, references: :id},
+            %{field: :user, table: "users", foreign_key: :assignee_id, references: :id}
+          ],
+          has_many: [],
+          has_one: [],
+          many_to_many: []
+        },
+        unique_constraints: [],
+        check_constraints: [],
+        table_type: :table
+      }
+
+      result =
+        SchemaBuilder.build_schema(table_info, "MyApp.Ticket", association_naming: "fk_stem")
+
+      assert result =~ "belongs_to :creator, Users"
+      assert result =~ "belongs_to :assignee, Users"
+    end
+
+    test "constraint strategy uses constraint names for duplicate belongs_to associations" do
+      table_info = %{
+        table: %{name: "tickets", type: :table, comment: nil},
+        columns: [
+          %{
+            name: "id",
+            data_type: "uuid",
+            not_null: true,
+            default: "gen_random_uuid()",
+            comment: nil,
+            position: 1,
+            enum_values: nil
+          },
+          %{
+            name: "creator_id",
+            data_type: "uuid",
+            not_null: true,
+            default: nil,
+            comment: nil,
+            position: 2,
+            enum_values: nil
+          },
+          %{
+            name: "editor_id",
+            data_type: "uuid",
+            not_null: true,
+            default: nil,
+            comment: nil,
+            position: 3,
+            enum_values: nil
+          }
+        ],
+        primary_keys: ["id"],
+        relationships: %{
+          belongs_to: [
+            %{
+              field: :user,
+              table: "users",
+              foreign_key: :creator_id,
+              references: :id,
+              constraint_name: "tickets_creator_id_fkey"
+            },
+            %{
+              field: :user,
+              table: "users",
+              foreign_key: :editor_id,
+              references: :id,
+              constraint_name: "tickets_editor_id_fkey"
+            }
+          ],
+          has_many: [],
+          has_one: [],
+          many_to_many: []
+        },
+        unique_constraints: [],
+        check_constraints: [],
+        table_type: :table
+      }
+
+      result =
+        SchemaBuilder.build_schema(table_info, "MyApp.Ticket", association_naming: "constraint")
+
+      assert result =~ "belongs_to :tickets_creator_id_fkey, Users, foreign_key: :creator_id"
+      assert result =~ "belongs_to :tickets_editor_id_fkey, Users, foreign_key: :editor_id"
+    end
+
+    test "does not trim partial table token matches when deduping many_to_many join suffixes" do
+      table_info = %{
+        table: %{name: "doc", type: :table, comment: nil},
+        columns: [
+          %{
+            name: "id",
+            data_type: "uuid",
+            not_null: true,
+            default: "gen_random_uuid()",
+            comment: nil,
+            position: 1,
+            enum_values: nil
+          }
+        ],
+        primary_keys: ["id"],
+        relationships: %{
+          belongs_to: [],
+          has_many: [],
+          has_one: [],
+          many_to_many: [
+            %{
+              field: :docs,
+              table: "doc",
+              join_through: "document_place"
+            }
+          ]
+        },
+        unique_constraints: [],
+        check_constraints: [],
+        table_type: :table
+      }
+
+      result =
+        SchemaBuilder.build_schema(table_info, "MyApp.Doc", association_naming_apply: "always")
+
+      assert result =~
+               "many_to_many :doc_document_place, Doc, join_through: \"document_place\""
+    end
+
     test "adds type: :id to belongs_to when foreign key is integer but schema uses binary_id" do
       table_info = %{
         table: %{name: "organizations", type: :table, comment: nil},

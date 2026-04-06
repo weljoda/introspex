@@ -10,7 +10,7 @@ Add `introspex` to your list of dependencies in `mix.exs`:
 
 ```elixir
 def deps do
-  [{:introspex, "~> 0.2.0", only: :dev}]
+  [{:introspex, "~> 0.3.0", only: :dev}]
 end
 ```
 

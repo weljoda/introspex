@@ -16,7 +16,8 @@ defmodule Introspex.MixProject do
       test_coverage: [tool: ExCoveralls],
       package: package(),
       name: "Introspex",
-      description: "Generate Ecto schemas from existing PostgreSQL database structures",
+      description:
+        "Generate Ecto schemas and Ash resources from existing PostgreSQL database structures",
       source_url: @source_url,
       homepage_url: @source_url,
       docs: docs()
@@ -37,6 +38,7 @@ defmodule Introspex.MixProject do
       {:ecto, "~> 3.10"},
       {:postgrex, "~> 0.17"},
       {:jason, "~> 1.4"},
+      {:inflex, "~> 2.1"},
 
       # Dev & Test
       {:ex_doc, "~> 0.31.1", only: :dev, runtime: false},

@@ -9,7 +9,7 @@ defmodule Introspex.Postgres.Introspector do
   """
   def list_tables(repo, schema \\ "public", exclude_views \\ false) do
     base_query = """
-    SELECT 
+    SELECT
       c.relname AS table_name,
       CASE c.relkind
         WHEN 'r' THEN 'table'
@@ -52,23 +52,24 @@ defmodule Introspex.Postgres.Introspector do
   """
   def get_columns(repo, table_name, schema \\ "public") do
     query = """
-    SELECT 
+    SELECT
       a.attname AS column_name,
       pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
       a.attnotnull AS not_null,
       pg_get_expr(d.adbin, d.adrelid) AS default_value,
       col_description(c.oid, a.attnum) AS comment,
       a.attnum AS ordinal_position,
-      CASE 
-        WHEN t.typtype = 'e' THEN 
+      CASE
+        WHEN t.typtype = 'e' THEN
           ARRAY(
-            SELECT e.enumlabel 
-            FROM pg_enum e 
-            WHERE e.enumtypid = a.atttypid 
+            SELECT e.enumlabel
+            FROM pg_enum e
+            WHERE e.enumtypid = a.atttypid
             ORDER BY e.enumsortorder
           )
         ELSE NULL
-      END AS enum_values
+      END AS enum_values,
+      a.attidentity AS identity_type
     FROM pg_catalog.pg_attribute a
     INNER JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
     INNER JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -83,11 +84,22 @@ defmodule Introspex.Postgres.Introspector do
 
     case repo.query(query, [schema, table_name]) do
       {:ok, result} ->
-        Enum.map(result.rows, fn [name, type, not_null, default, comment, position, enum_values] ->
+        Enum.map(result.rows, fn [
+                                   name,
+                                   type,
+                                   not_null,
+                                   default,
+                                   comment,
+                                   position,
+                                   enum_values,
+                                   identity_type
+                                 ] ->
           %{
             name: name,
             data_type: type,
             not_null: not_null,
+            has_db_default: not is_nil(default),
+            generated_always: identity_type == "a",
             default: parse_default(default),
             comment: comment,
             position: position,
@@ -290,10 +302,11 @@ defmodule Introspex.Postgres.Introspector do
       String.match?(default, ~r/nextval\(/) ->
         nil
 
-      # Remove type casting
-      String.match?(default, ~r/^'(.*)'::\w+$/) ->
+      # Remove type casting (handles single-word and multi-word types like ::character varying,
+      # ::timestamp without time zone, ::public.my_enum, ::numeric(10,2))
+      String.match?(default, ~r/^'(.*)'::[\w\s.()\[\],]+$/) ->
         default
-        |> String.replace(~r/^'(.*)'::\w+$/, "\\1")
+        |> String.replace(~r/^'(.*)'::[\w\s.()\[\],]+$/, "\\1")
         |> case do
           "" -> nil
           value -> value

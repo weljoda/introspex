@@ -17,6 +17,16 @@ defmodule Introspex.Postgres.IntrospectorTest do
       assert Introspector.parse_default("'123'::integer") == "123"
     end
 
+    test "removes multi-word type casts" do
+      assert Introspector.parse_default("'foo'::character varying") == "foo"
+
+      assert Introspector.parse_default("'2024-01-01'::timestamp without time zone") ==
+               "2024-01-01"
+
+      assert Introspector.parse_default("'active'::public.my_enum") == "active"
+      assert Introspector.parse_default("'1.5'::numeric(10,2)") == "1.5"
+    end
+
     test "returns nil for sequence defaults" do
       assert Introspector.parse_default("nextval('users_id_seq'::regclass)") == nil
     end

@@ -1,65 +1,78 @@
-defmodule Mix.Tasks.Ecto.Gen.Schema do
-  @shortdoc "Generates Ecto schemas from an existing PostgreSQL database"
+defmodule Mix.Tasks.Introspex.Gen.Ash.Resource do
+  @shortdoc "Generates Ash 3.x resources from an existing PostgreSQL database"
   @moduledoc """
-  Generates Ecto schemas from an existing PostgreSQL database.
+  Generates Ash 3.x resource files from an existing PostgreSQL database.
 
-  This task introspects your PostgreSQL database and generates Ecto schema
-  files with proper field types, associations, and changesets.
+  This task introspects your PostgreSQL database and generates Ash resource files
+  with proper attribute types, relationships, actions, and identities.
+
+  Before running, ensure your project has the required dependencies:
+
+      # mix.exs
+      {:ash, "~> 3.0"},
+      {:ash_postgres, "~> 2.0"},
 
   ## Examples
 
-      $ mix ecto.gen.schema --repo MyApp.Repo
-      $ mix ecto.gen.schema --repo MyApp.Repo --schema public --table users
-      $ mix ecto.gen.schema --repo MyApp.Repo --exclude-views
-      $ mix ecto.gen.schema --repo MyApp.Repo --binary-id --dry-run
-      $ mix ecto.gen.schema --repo MyApp.Repo --singularize
-      $ mix ecto.gen.schema --repo MyApp.Repo --context Accounts --context-tables users,profiles
-      $ mix ecto.gen.schema --repo MyApp.Repo --context Blog --context-tables posts,comments,tags
+      $ mix introspex.gen.ash.resource --repo MyApp.Repo
+      $ mix introspex.gen.ash.resource --repo MyApp.Repo --domain Core
+      $ mix introspex.gen.ash.resource --repo MyApp.Repo --domain Accounts --context-tables users,profiles
+      $ mix introspex.gen.ash.resource --repo MyApp.Repo --binary-id --dry-run
+      $ mix introspex.gen.ash.resource --repo MyApp.Repo --table users --domain Accounts
 
   ## Options
 
     * `--repo` - the repository module (required)
     * `--schema` - PostgreSQL schema name (default: "public")
-    * `--table` - generate schema for a specific table only
-    * `--exclude-views` - skip generating schemas for views and materialized views
-    * `--binary-id` - use binary_id (UUID) for primary keys
-    * `--no-timestamps` - do not generate timestamps() in schemas
-    * `--no-changesets` - skip generating changeset functions
-    * `--no-associations` - skip detecting and generating associations
+    * `--table` - generate resource for a specific table only
+    * `--exclude-views` - skip generating resources for views and materialized views
+    * `--binary-id` - use UUID primary keys (auto-detected from column type)
+    * `--no-timestamps` - do not generate `timestamps()` in resources
+    * `--no-associations` - skip detecting and generating relationships
     * `--module-prefix` - prefix for generated module names (default: app name)
-    * `--output-dir` - output directory for schema files (default: lib/app_name)
+    * `--output-dir` - output directory for resource files (default: lib/app_name)
     * `--dry-run` - preview what would be generated without writing files
-    * `--context` - Phoenix context name for organizing related schemas
-    * `--context-tables` - comma-separated list of tables to include in the context (only these tables will be generated)
-    * `--path` - custom path segment(s) to insert in the output directory (e.g., "queries" results in lib/app_name/queries/...)
-    * `--association-naming` - association naming strategy: fk_stem, table_plus_stem, constraint (default: table_plus_stem)
-    * `--association-naming-apply` - when to apply naming strategy: duplicates_only, always (default: duplicates_only)
+    * `--domain` - Ash Domain module name (e.g. "Core"); all tables are scoped under this domain.
+      Use `--context-tables` to limit which tables are included.
+    * `--context` - alias for `--domain` for compatibility with Ecto task conventions
+    * `--context-tables` - comma-separated list of tables to include in the domain (optional;
+      omit to include all tables)
+    * `--path` - custom path segment(s) to insert in the output directory
+    * `--association-naming` - naming strategy: fk_stem, table_plus_stem, constraint (default: table_plus_stem)
+    * `--association-naming-apply` - when to apply: duplicates_only, always (default: duplicates_only)
     * `--singularize` - singularize module names to match Elixir conventions (default: true; use `--no-singularize` to keep plural names)
 
   ## Association Naming
 
-  Introspex can disambiguate association field names when multiple relationships would otherwise
-  produce duplicates.
+  See `mix ecto.gen.schema` documentation for full details. The same strategies
+  and apply modes are supported.
 
-  Strategies:
+  ## Generated file layout
 
-    * `fk_stem` - uses role stems from foreign key names (e.g. `creator_id` -> `:creator`)
-    * `table_plus_stem` - combines target table and role stem (default)
-    * `constraint` - uses foreign key constraint names when available
+  `--domain Core` (no `--context-tables` — all tables under one domain):
 
-  Apply modes:
+      lib/my_app/core/user.ex
+      lib/my_app/core/post.ex
+      lib/my_app/core/...              ← one file per table
+      lib/my_app/core.ex               ← Ash Domain module listing all resources
 
-    * `duplicates_only` - only rename when collisions occur (default)
-    * `always` - always apply the selected strategy
+  `--domain Accounts --context-tables users,profiles` (scoped domain):
 
-  Collision detection is global across `belongs_to`, `has_many`, `has_one`, and `many_to_many`.
+      lib/my_app/accounts/user.ex
+      lib/my_app/accounts/profile.ex
+      lib/my_app/accounts.ex           ← Ash Domain module
 
+  ## many_to_many and join tables
+
+  Ash requires `many_to_many` relationships to reference a full resource module as
+  `through:`. Ensure that any join tables are also generated as Ash resources (they
+  are included automatically unless filtered with `--context-tables`).
   """
 
   use Mix.Task
 
   alias Introspex.Postgres.{Introspector, RelationshipAnalyzer}
-  alias Introspex.{SchemaBuilder, ContextBuilder}
+  alias Introspex.{AshResourceBuilder, AshDomainBuilder}
 
   @switches [
     repo: :string,
@@ -68,11 +81,11 @@ defmodule Mix.Tasks.Ecto.Gen.Schema do
     exclude_views: :boolean,
     binary_id: :boolean,
     no_timestamps: :boolean,
-    no_changesets: :boolean,
     no_associations: :boolean,
     module_prefix: :string,
     output_dir: :string,
     dry_run: :boolean,
+    domain: :string,
     context: :string,
     context_tables: :string,
     path: :string,
@@ -107,7 +120,6 @@ defmodule Mix.Tasks.Ecto.Gen.Schema do
           Enum.filter(tables, &(&1.name == specific_table))
 
         tables ->
-          # If context-tables is specified, only process those tables
           context_tables = parse_context_tables(opts)
 
           if context_tables != [] do
@@ -118,46 +130,68 @@ defmodule Mix.Tasks.Ecto.Gen.Schema do
       end
 
     if Enum.empty?(tables) do
-      Mix.shell().info("No tables found to generate schemas for.")
+      Mix.shell().info("No tables found to generate resources for.")
     else
       Mix.shell().info("Found #{length(tables)} table(s) to process.")
 
-      # Generate schemas for each table
-      context_schemas =
+      results =
         Enum.map(tables, fn table_info ->
-          generate_schema_for_table(repo, table_info, tables, schema, opts, dry_run)
+          generate_resource_for_table(repo, table_info, tables, schema, opts, dry_run)
         end)
 
-      # Generate context module if context is specified
-      if Keyword.get(opts, :context) && !dry_run do
-        generate_context_module(opts, context_schemas)
-      end
+      resource_schemas = Enum.map(results, &elem(&1, 0))
+      resource_paths = results |> Enum.map(&elem(&1, 1)) |> Enum.reject(&is_nil/1)
+
+      domain = resolve_domain(opts)
+
+      domain_path =
+        if domain && !dry_run do
+          generate_domain_module(opts, resource_schemas)
+        end
 
       if dry_run do
         Mix.shell().info("\nDry run complete. No files were written.")
       else
-        Mix.shell().info("\nSchema generation complete!")
+        all_paths = resource_paths ++ List.wrap(domain_path)
+        Mix.Task.run("format", all_paths)
+
+        app_atom = get_app_name(opts) |> Macro.underscore()
+
+        completion_message =
+          if domain do
+            domain_module = build_domain_module_name(domain, opts)
+
+            """
+
+            Resource generation complete!
+
+            Add the generated domain to your config/config.exs:
+                config :#{app_atom}, ash_domains: [#{domain_module}]
+            """
+          else
+            "\nResource generation complete!"
+          end
+
+        Mix.shell().info(completion_message)
       end
     end
   end
 
-  # Generates a schema file for a single database table
-  defp generate_schema_for_table(repo, table_info, all_tables, db_schema, opts, dry_run) do
+  defp generate_resource_for_table(repo, table_info, all_tables, db_schema, opts, dry_run) do
     Mix.shell().info("\nProcessing #{table_info.type}: #{table_info.name}")
 
-    # Filter context options to only include the current table if it's in the context
+    domain = resolve_domain(opts)
+
     table_opts =
-      if should_include_in_context?(table_info.name, opts) do
+      if should_include_in_domain?(table_info.name, opts) do
         opts
       else
-        Keyword.drop(opts, [:context])
+        Keyword.drop(opts, [:domain, :context])
       end
 
-    # Get table metadata
     columns = Introspector.get_columns(repo, table_info.name, db_schema)
     primary_keys = Introspector.get_primary_keys(repo, table_info.name, db_schema)
 
-    # Get relationships unless disabled
     relationships =
       if Keyword.get(opts, :no_associations, false) or table_info.type != :table do
         %{belongs_to: [], has_many: [], has_one: [], many_to_many: []}
@@ -165,7 +199,6 @@ defmodule Mix.Tasks.Ecto.Gen.Schema do
         RelationshipAnalyzer.analyze_relationships(repo, table_info.name, all_tables, db_schema)
       end
 
-    # Get constraints
     unique_constraints =
       if table_info.type == :table do
         Introspector.get_unique_constraints(repo, table_info.name, db_schema)
@@ -180,7 +213,6 @@ defmodule Mix.Tasks.Ecto.Gen.Schema do
         []
       end
 
-    # Build the schema
     module_name = build_module_name(table_info.name, table_opts)
 
     table_data = %{
@@ -193,56 +225,54 @@ defmodule Mix.Tasks.Ecto.Gen.Schema do
       table_type: table_info.type
     }
 
-    # Calculate module prefix for associations
-    context = Keyword.get(opts, :context)
-
     module_prefix =
-      if context && table_info.name in parse_context_tables(opts) do
-        # Remove the table name from the end to get the prefix
-        module_name
-        |> String.split(".")
-        |> List.delete_at(-1)
-        |> Enum.join(".")
+      module_name
+      |> String.split(".")
+      |> List.delete_at(-1)
+      |> Enum.join(".")
+
+    # Derive the domain module full name for the resource's `domain:` option
+    domain_module =
+      if should_include_in_domain?(table_info.name, opts) do
+        build_domain_module_name(domain, opts)
       else
-        # For non-context tables, use the app name + path
-        module_name
-        |> String.split(".")
-        |> List.delete_at(-1)
-        |> Enum.join(".")
+        nil
       end
 
     builder_opts = [
       binary_id: Keyword.get(opts, :binary_id, false),
       skip_timestamps: Keyword.get(opts, :no_timestamps, false),
-      skip_changesets: Keyword.get(opts, :no_changesets, false),
-      app_name: get_app_name(opts),
+      no_associations: Keyword.get(opts, :no_associations, false),
       module_prefix: module_prefix,
+      repo_module: Keyword.get(opts, :repo) |> to_string(),
+      domain_module: domain_module,
       association_naming: Keyword.get(opts, :association_naming, "table_plus_stem"),
       association_naming_apply: Keyword.get(opts, :association_naming_apply, "duplicates_only"),
       singularize: Keyword.get(opts, :singularize, true)
     ]
 
-    schema_content = SchemaBuilder.build_schema(table_data, module_name, builder_opts)
+    resource_content = AshResourceBuilder.build_resource(table_data, module_name, builder_opts)
 
-    # Write or display the schema
-    if dry_run do
-      Mix.shell().info("\n--- #{module_name} ---")
-      Mix.shell().info(schema_content)
-    else
-      write_schema_file(module_name, schema_content, table_opts)
-    end
+    file_path =
+      if dry_run do
+        Mix.shell().info("\n--- #{module_name} ---")
+        Mix.shell().info(resource_content)
+        nil
+      else
+        write_resource_file(module_name, resource_content, table_opts)
+      end
 
-    # Return schema info for context generation
-    %{
+    schema_info = %{
       module_name: String.split(module_name, ".") |> List.last(),
       singular_name: singularize(table_info.name),
       plural_name: Macro.underscore(table_info.name),
       table_name: table_info.name,
       table_type: table_info.type
     }
+
+    {schema_info, file_path}
   end
 
-  # Extracts and validates the repository module from options
   defp get_repo!(opts) do
     case Keyword.get(opts, :repo) do
       nil ->
@@ -262,18 +292,19 @@ defmodule Mix.Tasks.Ecto.Gen.Schema do
 
     unless association_naming in allowed_naming do
       Mix.raise(
-        "Invalid --association-naming value: #{association_naming}. Allowed values: #{Enum.join(allowed_naming, ", ")}"
+        "Invalid --association-naming value: #{association_naming}. " <>
+          "Allowed values: #{Enum.join(allowed_naming, ", ")}"
       )
     end
 
     unless association_naming_apply in allowed_apply do
       Mix.raise(
-        "Invalid --association-naming-apply value: #{association_naming_apply}. Allowed values: #{Enum.join(allowed_apply, ", ")}"
+        "Invalid --association-naming-apply value: #{association_naming_apply}. " <>
+          "Allowed values: #{Enum.join(allowed_apply, ", ")}"
       )
     end
   end
 
-  # Ensures the repository is compiled and started
   defp ensure_repo_started!(repo) do
     case Code.ensure_compiled(repo) do
       {:module, _} ->
@@ -294,33 +325,14 @@ defmodule Mix.Tasks.Ecto.Gen.Schema do
     end
   end
 
-  # Builds the full module name including app prefix, path segments, and context
   defp build_module_name(table_name, opts) do
     prefix = Keyword.get(opts, :module_prefix, get_app_name(opts))
-    context = Keyword.get(opts, :context)
-    context_tables = parse_context_tables(opts)
-    custom_path = Keyword.get(opts, :path)
+    domain = resolve_domain(opts)
+    base_parts = [prefix] ++ camelize_path_parts(opts)
 
-    # Build module parts starting with prefix
-    base_parts = [prefix]
-
-    # Add path segments if provided
-    base_parts =
-      if custom_path do
-        path_parts =
-          custom_path
-          |> String.split("/", trim: true)
-          |> Enum.map(&Macro.camelize/1)
-
-        base_parts ++ path_parts
-      else
-        base_parts
-      end
-
-    # Add context and table name
     module_parts =
-      if context && table_name in context_tables do
-        base_parts ++ [context, camelize_table(table_name, opts)]
+      if should_include_in_domain?(table_name, opts) do
+        base_parts ++ [domain, camelize_table(table_name, opts)]
       else
         base_parts ++ [camelize_table(table_name, opts)]
       end
@@ -328,7 +340,18 @@ defmodule Mix.Tasks.Ecto.Gen.Schema do
     Enum.join(module_parts, ".")
   end
 
-  # Gets the application name from options or Mix project config
+  defp build_domain_module_name(domain, opts) do
+    base_parts = [get_app_name(opts)] ++ camelize_path_parts(opts)
+    Enum.join(base_parts ++ [domain], ".")
+  end
+
+  defp camelize_path_parts(opts) do
+    case Keyword.get(opts, :path) do
+      nil -> []
+      path -> path |> String.split("/", trim: true) |> Enum.map(&Macro.camelize/1)
+    end
+  end
+
   defp get_app_name(opts) do
     Keyword.get(opts, :module_prefix) ||
       Mix.Project.config()[:app]
@@ -336,7 +359,11 @@ defmodule Mix.Tasks.Ecto.Gen.Schema do
       |> Macro.camelize()
   end
 
-  # Parses the comma-separated list of context tables from options
+  # Support both --domain and --context for symmetry with mix ecto.gen.schema
+  defp resolve_domain(opts) do
+    Keyword.get(opts, :domain) || Keyword.get(opts, :context)
+  end
+
   defp parse_context_tables(opts) do
     case Keyword.get(opts, :context_tables) do
       nil ->
@@ -349,61 +376,45 @@ defmodule Mix.Tasks.Ecto.Gen.Schema do
     end
   end
 
-  # Determines if a table should be included in the context based on options
-  defp should_include_in_context?(table_name, opts) do
-    context = Keyword.get(opts, :context)
+  defp should_include_in_domain?(table_name, opts) do
+    domain = resolve_domain(opts)
     context_tables = parse_context_tables(opts)
 
-    context != nil && (context_tables == [] || table_name in context_tables)
+    domain != nil && (context_tables == [] || table_name in context_tables)
   end
 
-  # Writes the generated schema content to the appropriate file path
-  defp write_schema_file(module_name, content, opts) do
-    # Determine output path
+  defp write_resource_file(module_name, content, opts) do
     app_name = get_app_name(opts) |> Macro.underscore()
     output_dir = Keyword.get(opts, :output_dir, "lib/#{app_name}")
 
-    # Convert module name to file path
     module_parts = String.split(module_name, ".")
-
-    # Skip the app prefix to get the relative path
     [_app_prefix | relative_parts] = module_parts
-
-    # Convert each part to underscore and build the file path
     relative_path_parts = Enum.map(relative_parts, &Macro.underscore/1)
     file_name = List.last(relative_path_parts)
     directory_parts = List.delete_at(relative_path_parts, -1)
 
-    # Build the full file path
-    full_path_parts = [output_dir] ++ directory_parts
-    file_path = Path.join(full_path_parts ++ ["#{file_name}.ex"])
+    file_path = Path.join([output_dir] ++ directory_parts ++ ["#{file_name}.ex"])
 
-    # Ensure directory exists
     File.mkdir_p!(Path.dirname(file_path))
-
-    # Write the file
     File.write!(file_path, content)
     Mix.shell().info("Created #{file_path}")
+    file_path
   end
 
-  # Generates the Phoenix context module file if --context option is provided
-  defp generate_context_module(opts, schemas) do
-    context = Keyword.get(opts, :context)
+  defp generate_domain_module(opts, schemas) do
+    domain = resolve_domain(opts)
 
-    if context do
-      # Filter out nil schemas from dry run
+    if domain do
       schemas = Enum.reject(schemas, &is_nil/1)
 
-      context_content =
-        ContextBuilder.build_context(
-          context,
+      domain_content =
+        AshDomainBuilder.build_domain(
+          domain,
           schemas,
           app_name: get_app_name(opts),
-          repo_module: Keyword.get(opts, :repo) |> to_string(),
           path: Keyword.get(opts, :path)
         )
 
-      # Write context file
       app_name = get_app_name(opts) |> Macro.underscore()
       output_dir = Keyword.get(opts, :output_dir, "lib/#{app_name}")
       custom_path = Keyword.get(opts, :path)
@@ -412,11 +423,12 @@ defmodule Mix.Tasks.Ecto.Gen.Schema do
         [output_dir] ++
           if custom_path, do: String.split(custom_path, "/", trim: true), else: []
 
-      context_file_path = Path.join(path_parts ++ ["#{Macro.underscore(context)}.ex"])
+      domain_file_path = Path.join(path_parts ++ ["#{Macro.underscore(domain)}.ex"])
 
-      File.mkdir_p!(Path.dirname(context_file_path))
-      File.write!(context_file_path, context_content)
-      Mix.shell().info("Created #{context_file_path}")
+      File.mkdir_p!(Path.dirname(domain_file_path))
+      File.write!(domain_file_path, domain_content)
+      Mix.shell().info("Created #{domain_file_path}")
+      domain_file_path
     end
   end
 

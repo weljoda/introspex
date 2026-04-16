@@ -188,6 +188,99 @@ defmodule Introspex.Postgres.TypeMapperTest do
     end
   end
 
+  describe "ash_map_type/3" do
+    test "maps uuid to :uuid (not :binary_id)" do
+      assert TypeMapper.ash_map_type("uuid") == :uuid
+    end
+
+    test "maps json/jsonb to :map" do
+      assert TypeMapper.ash_map_type("json") == :map
+      assert TypeMapper.ash_map_type("jsonb") == :map
+    end
+
+    test "maps enums to {:ash_enum, values}" do
+      assert TypeMapper.ash_map_type("user-defined", ["active", "inactive"]) ==
+               {:ash_enum, [:active, :inactive]}
+    end
+
+    test "maps arrays of uuid to {:array, :uuid}" do
+      assert TypeMapper.ash_map_type("uuid[]") == {:array, :uuid}
+    end
+
+    test "maps arrays of json to {:array, :map}" do
+      assert TypeMapper.ash_map_type("json[]") == {:array, :map}
+    end
+
+    test "passes PostGIS types through as tuples (ash_type_to_string renders them as :string)" do
+      assert TypeMapper.ash_map_type("geometry") == {:geometry, "Geometry"}
+      assert TypeMapper.ash_map_type("geography") == {:geography, "Geography"}
+    end
+
+    test "maps integer types consistently with map_type" do
+      assert TypeMapper.ash_map_type("integer") == :integer
+      assert TypeMapper.ash_map_type("bigint") == :integer
+    end
+
+    test "falls back to :string for unknown types" do
+      assert TypeMapper.ash_map_type("unknown_pg_type") == :string
+    end
+  end
+
+  describe "ash_type_to_string/1" do
+    test "renders simple atom types" do
+      assert TypeMapper.ash_type_to_string(:integer) == ":integer"
+      assert TypeMapper.ash_type_to_string(:uuid) == ":uuid"
+      assert TypeMapper.ash_type_to_string(:string) == ":string"
+      assert TypeMapper.ash_type_to_string(:map) == ":map"
+    end
+
+    test "renders array types" do
+      assert TypeMapper.ash_type_to_string({:array, :integer}) == "{:array, :integer}"
+      assert TypeMapper.ash_type_to_string({:array, :uuid}) == "{:array, :uuid}"
+      assert TypeMapper.ash_type_to_string({:array, :map}) == "{:array, :map}"
+    end
+
+    test "renders ash_enum as :atom with constraints" do
+      result = TypeMapper.ash_type_to_string({:ash_enum, [:active, :inactive]})
+      assert result == ":atom, constraints: [one_of: [:active, :inactive]]"
+    end
+
+    test "renders PostGIS geometry/geography as :string" do
+      assert TypeMapper.ash_type_to_string({:geometry, "Point"}) == ":string"
+      assert TypeMapper.ash_type_to_string({:geography, "Polygon"}) == ":string"
+    end
+
+    test "round-trip: ash_type_to_string(ash_map_type(type)) produces valid strings" do
+      assert TypeMapper.ash_map_type("uuid") |> TypeMapper.ash_type_to_string() == ":uuid"
+      assert TypeMapper.ash_map_type("jsonb") |> TypeMapper.ash_type_to_string() == ":map"
+      assert TypeMapper.ash_map_type("integer") |> TypeMapper.ash_type_to_string() == ":integer"
+
+      assert TypeMapper.ash_map_type("user-defined", ["a", "b"])
+             |> TypeMapper.ash_type_to_string() == ":atom, constraints: [one_of: [:a, :b]]"
+    end
+  end
+
+  describe "integer_type?/1" do
+    test "returns true for integer-family types" do
+      assert TypeMapper.integer_type?("integer") == true
+      assert TypeMapper.integer_type?("bigint") == true
+      assert TypeMapper.integer_type?("smallint") == true
+      assert TypeMapper.integer_type?("int4") == true
+      assert TypeMapper.integer_type?("int8") == true
+      assert TypeMapper.integer_type?("int2") == true
+      assert TypeMapper.integer_type?("serial") == true
+      assert TypeMapper.integer_type?("bigserial") == true
+      assert TypeMapper.integer_type?("smallserial") == true
+    end
+
+    test "returns false for non-integer types" do
+      assert TypeMapper.integer_type?("varchar") == false
+      assert TypeMapper.integer_type?("uuid") == false
+      assert TypeMapper.integer_type?("text") == false
+      assert TypeMapper.integer_type?("decimal") == false
+    end
+  end
+
   describe "requires_special_import?/1" do
     test "returns true for PostGIS types" do
       assert TypeMapper.requires_special_import?({:geometry, "Point"}) == true

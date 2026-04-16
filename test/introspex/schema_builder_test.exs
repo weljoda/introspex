@@ -1209,10 +1209,10 @@ defmodule Introspex.SchemaBuilderTest do
 
       result = SchemaBuilder.build_schema(table_info, "MyApp.Address")
 
-      assert result =~ "has_many :events, Events, foreign_key: :location_id"
+      assert result =~ "has_many :events, Event, foreign_key: :location_id"
 
       assert result =~
-               "many_to_many :document_versions, DocumentVersions, join_through: \"document_version_location\""
+               "many_to_many :document_versions, DocumentVersion, join_through: \"document_version_location\""
     end
 
     test "always apply mode rewrites even non-conflicting names" do
@@ -1255,7 +1255,7 @@ defmodule Introspex.SchemaBuilderTest do
       result =
         SchemaBuilder.build_schema(table_info, "MyApp.Event", association_naming_apply: "always")
 
-      assert result =~ "belongs_to :user_creator, Users, foreign_key: :creator_id"
+      assert result =~ "belongs_to :user_creator, User, foreign_key: :creator_id"
     end
 
     test "fk_stem strategy disambiguates duplicate belongs_to associations" do
@@ -1308,8 +1308,8 @@ defmodule Introspex.SchemaBuilderTest do
       result =
         SchemaBuilder.build_schema(table_info, "MyApp.Ticket", association_naming: "fk_stem")
 
-      assert result =~ "belongs_to :creator, Users"
-      assert result =~ "belongs_to :assignee, Users"
+      assert result =~ "belongs_to :creator, User"
+      assert result =~ "belongs_to :assignee, User"
     end
 
     test "constraint strategy uses constraint names for duplicate belongs_to associations" do
@@ -1374,8 +1374,8 @@ defmodule Introspex.SchemaBuilderTest do
       result =
         SchemaBuilder.build_schema(table_info, "MyApp.Ticket", association_naming: "constraint")
 
-      assert result =~ "belongs_to :tickets_creator_id_fkey, Users, foreign_key: :creator_id"
-      assert result =~ "belongs_to :tickets_editor_id_fkey, Users, foreign_key: :editor_id"
+      assert result =~ "belongs_to :tickets_creator_id_fkey, User, foreign_key: :creator_id"
+      assert result =~ "belongs_to :tickets_editor_id_fkey, User, foreign_key: :editor_id"
     end
 
     test "does not trim partial table token matches when deduping many_to_many join suffixes" do
@@ -1476,7 +1476,7 @@ defmodule Introspex.SchemaBuilderTest do
       assert result =~ "@foreign_key_type :binary_id"
 
       # Should add type: :id to the belongs_to association
-      assert result =~ "belongs_to :role, Roles, type: :id"
+      assert result =~ "belongs_to :role, Role, type: :id"
     end
   end
 end

@@ -25,6 +25,7 @@ defmodule Introspex.SchemaBuilder do
     skip_timestamps = Keyword.get(opts, :skip_timestamps, false)
     _app_name = Keyword.get(opts, :app_name, "MyApp")
     module_prefix = Keyword.get(opts, :module_prefix)
+    singularize = Keyword.get(opts, :singularize, true)
 
     relationships = normalize_relationships(relationships, opts)
 
@@ -75,7 +76,8 @@ defmodule Introspex.SchemaBuilder do
         table_type: table_type,
         primary_key_info: primary_key_info,
         module_prefix: module_prefix,
-        columns: columns
+        columns: columns,
+        singularize: singularize
       })
 
     changeset_definition =
@@ -95,7 +97,7 @@ defmodule Introspex.SchemaBuilder do
     )
   end
 
-  defp normalize_relationships(relationships, opts) do
+  def normalize_relationships(relationships, opts) do
     naming_style =
       parse_association_naming(Keyword.get(opts, :association_naming, "table_plus_stem"))
 
@@ -120,6 +122,8 @@ defmodule Introspex.SchemaBuilder do
           for(e <- all_entries, !Map.has_key?(duplicates, e.assoc.field), do: e.assoc.field)
           |> MapSet.new()
 
+    singularize_names = Keyword.get(opts, :singularize, true)
+
     {rewritten_entries, _} =
       Enum.map_reduce(all_entries, fixed_fields, fn entry, taken ->
         is_duplicate = Map.has_key?(duplicates, entry.assoc.field)
@@ -130,7 +134,7 @@ defmodule Introspex.SchemaBuilder do
             |> generate_association_field(naming_style)
             |> ensure_unique_field(taken)
           else
-            entry.assoc.field
+            apply_base_naming(entry, singularize_names)
           end
 
         {%{entry | assoc: %{entry.assoc | field: new_field}}, MapSet.put(taken, new_field)}
@@ -143,6 +147,19 @@ defmodule Introspex.SchemaBuilder do
 
   defp ensure_relationship_keys(map) do
     Map.merge(Map.new(@association_kinds, &{&1, []}), map)
+  end
+
+  defp apply_base_naming(%{kind: kind, assoc: assoc}, singularize_names) do
+    field_str = to_string(assoc.field)
+
+    case kind do
+      k when k in [:belongs_to, :has_one] ->
+        name = if singularize_names, do: singularize(field_str), else: field_str
+        String.to_atom(name)
+
+      _ ->
+        field_str |> pluralize() |> String.to_atom()
+    end
   end
 
   defp ensure_unique_field(field, taken, counter \\ 1) do
@@ -267,16 +284,8 @@ defmodule Introspex.SchemaBuilder do
   defp parse_association_naming("table_plus_stem"), do: :table_plus_stem
   defp parse_association_naming("constraint"), do: :constraint
 
-  defp singularize(value) do
-    cond do
-      String.ends_with?(value, "ies") -> String.replace_suffix(value, "ies", "y")
-      String.ends_with?(value, "ses") -> String.replace_suffix(value, "ses", "s")
-      String.ends_with?(value, "ches") -> String.replace_suffix(value, "ches", "ch")
-      String.ends_with?(value, "xes") -> String.replace_suffix(value, "xes", "x")
-      String.ends_with?(value, "s") -> String.replace_suffix(value, "s", "")
-      true -> value
-    end
-  end
+  defp singularize(value), do: Inflex.singularize(value)
+  defp pluralize(value), do: Inflex.pluralize(value)
 
   defp build_module(
          module_name,
@@ -335,7 +344,8 @@ defmodule Introspex.SchemaBuilder do
          table_type: table_type,
          primary_key_info: primary_key_info,
          module_prefix: module_prefix,
-         columns: columns
+         columns: columns,
+         singularize: singularize
        }) do
     primary_key_config = build_primary_key_config(primary_keys, binary_id, primary_key_info)
 
@@ -346,7 +356,7 @@ defmodule Introspex.SchemaBuilder do
 
     association_definitions =
       if table_type == :table do
-        build_association_definitions(relationships, module_prefix, columns, binary_id)
+        build_association_definitions(relationships, module_prefix, columns, binary_id, singularize)
       else
         []
       end
@@ -469,23 +479,23 @@ defmodule Introspex.SchemaBuilder do
     end
   end
 
-  defp build_association_definitions(relationships, module_prefix, columns, binary_id) do
+  defp build_association_definitions(relationships, module_prefix, columns, binary_id, singularize) do
     belongs_to =
       Enum.map(
         Map.get(relationships, :belongs_to, []),
-        &build_belongs_to(&1, module_prefix, columns, binary_id)
+        &build_belongs_to(&1, module_prefix, columns, binary_id, singularize)
       )
 
-    has_many = Enum.map(Map.get(relationships, :has_many, []), &build_has_many(&1, module_prefix))
-    has_one = Enum.map(Map.get(relationships, :has_one, []), &build_has_one(&1, module_prefix))
+    has_many = Enum.map(Map.get(relationships, :has_many, []), &build_has_many(&1, module_prefix, singularize))
+    has_one = Enum.map(Map.get(relationships, :has_one, []), &build_has_one(&1, module_prefix, singularize))
 
     many_to_many =
-      Enum.map(Map.get(relationships, :many_to_many, []), &build_many_to_many(&1, module_prefix))
+      Enum.map(Map.get(relationships, :many_to_many, []), &build_many_to_many(&1, module_prefix, singularize))
 
     belongs_to ++ has_many ++ has_one ++ many_to_many
   end
 
-  defp build_belongs_to(assoc, module_prefix, columns, binary_id) do
+  defp build_belongs_to(assoc, module_prefix, columns, binary_id, singularize) do
     opts = []
 
     opts =
@@ -495,7 +505,6 @@ defmodule Introspex.SchemaBuilder do
 
     opts = if assoc.references != :id, do: ["references: :#{assoc.references}" | opts], else: opts
 
-    # Check if we need to specify the type based on the foreign key column type
     fk_column = Enum.find(columns, &(&1.name == to_string(assoc.foreign_key)))
 
     opts =
@@ -509,7 +518,7 @@ defmodule Introspex.SchemaBuilder do
     module_name =
       if Map.get(assoc, :module),
         do: assoc.module,
-        else: table_to_module(assoc.table, module_prefix)
+        else: table_to_module(assoc.table, module_prefix, singularize)
 
     if length(opts) > 0 do
       "belongs_to :#{assoc.field}, #{module_name}, #{Enum.join(opts, ", ")}"
@@ -518,18 +527,18 @@ defmodule Introspex.SchemaBuilder do
     end
   end
 
-  defp build_has_many(assoc, module_prefix) do
-    module_name = table_to_module(assoc.table, module_prefix)
+  defp build_has_many(assoc, module_prefix, singularize) do
+    module_name = table_to_module(assoc.table, module_prefix, singularize)
     "has_many :#{assoc.field}, #{module_name}, foreign_key: :#{assoc.foreign_key}"
   end
 
-  defp build_has_one(assoc, module_prefix) do
-    module_name = table_to_module(assoc.table, module_prefix)
+  defp build_has_one(assoc, module_prefix, singularize) do
+    module_name = table_to_module(assoc.table, module_prefix, singularize)
     "has_one :#{assoc.field}, #{module_name}, foreign_key: :#{assoc.foreign_key}"
   end
 
-  defp build_many_to_many(assoc, module_prefix) do
-    module_name = table_to_module(assoc.table, module_prefix)
+  defp build_many_to_many(assoc, module_prefix, singularize) do
+    module_name = table_to_module(assoc.table, module_prefix, singularize)
     "many_to_many :#{assoc.field}, #{module_name}, join_through: \"#{assoc.join_through}\""
   end
 
@@ -603,12 +612,13 @@ defmodule Introspex.SchemaBuilder do
     |> Enum.join("\n    ")
   end
 
-  defp table_to_module(table_name, module_prefix) do
-    # If module_prefix is provided, prepend it to the module name
+  defp table_to_module(table_name, module_prefix, singularize) do
+    name = if singularize, do: Inflex.singularize(table_name), else: table_name
+
     if module_prefix do
-      "#{module_prefix}.#{Macro.camelize(table_name)}"
+      "#{module_prefix}.#{Macro.camelize(name)}"
     else
-      Macro.camelize(table_name)
+      Macro.camelize(name)
     end
   end
 

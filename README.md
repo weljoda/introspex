@@ -1,8 +1,8 @@
 # Introspex
 
-Generate Ecto schemas from existing PostgreSQL databases - including support for tables, views, materialized views, associations, and modern Ecto features.
+Generate Ecto schemas and Ash resources from existing PostgreSQL databases - including support for tables, views, materialized views, associations, and modern Ecto features.
 
-**Perfect for migrating existing applications to Elixir** - Whether you're moving from Rails, Django, or any other framework with an existing PostgreSQL database or are using an external migration tool (i.e., not ecto migrations), Introspex helps you quickly generate Elixir/Ecto schemas that match your current database structure.
+**Perfect for migrating existing applications to Elixir** - Whether you're moving from Rails, Django, or any other framework with an existing PostgreSQL database or are using an external migration tool (i.e., not ecto migrations), Introspex helps you quickly generate Elixir/Ecto schemas and Ash resources that match your current database structure.
 
 ## Installation
 
@@ -76,6 +76,7 @@ When using contexts:
 - Schemas are organized into subdirectories:
   - `lib/my_app/accounts/user.ex` for `MyApp.Accounts.User`
   - `lib/my_app/accounts/profile.ex` for `MyApp.Accounts.Profile`
+- Use `--no-singularize` to keep plural names from tables (`MyApp.Accounts.Users`)
 - Views and materialized views only get read operations (list and get) in the context module
 - Duplicate function names are automatically prevented when tables have the same singular form (e.g., `user_account` and `user_accounts`)
 
@@ -120,6 +121,7 @@ mix ecto.gen.schema --repo MyApp.Repo --path queries --context Accounts --contex
 - `--path` - Custom path segment(s) to insert in the output directory (e.g., "queries" results in lib/app_name/queries/...)
 - `--association-naming` - Association naming strategy: `fk_stem`, `table_plus_stem`, `constraint` (default: `table_plus_stem`)
 - `--association-naming-apply` - When to apply naming strategy: `duplicates_only`, `always` (default: `duplicates_only`)
+- `--singularize` / `--no-singularize` - Singularize module names (default: true; `users` → `User`, `user_profiles` → `UserProfile`)
 
 ## Association Naming
 
@@ -285,6 +287,97 @@ Common patterns:
 - Use `{:array, :string}` for arrays of UUIDs or strings
 - Use `{:array, :integer}` for arrays of numeric IDs
 - Use `{:array, :map}` for arrays of objects
+
+## Ash 3.x Resource Generation
+
+In addition to Ecto schemas, Introspex can generate [Ash 3.x](https://ash-hq.org) resources and domain modules directly from your PostgreSQL database.
+
+### Prerequisites
+
+Add the following to your `mix.exs`:
+
+```elixir
+{:ash, "~> 3.0"},
+{:ash_postgres, "~> 2.0"}
+```
+
+### Basic Usage
+
+```bash
+mix introspex.gen.ash.resource --repo MyApp.Repo
+```
+
+### Generate Resources for a Specific Table
+
+```bash
+mix introspex.gen.ash.resource --repo MyApp.Repo --table users
+```
+
+### Generate with an Ash Domain
+
+Use `--domain` to place all resources under a shared namespace and generate an Ash Domain module
+that registers them all. This is the recommended starting point for large databases — generate
+everything under one domain first, then refactor into multiple domains manually.
+
+**All tables under one domain** (recommended for large databases):
+
+```bash
+mix introspex.gen.ash.resource --repo MyApp.Repo --domain Core
+```
+
+```
+lib/my_app/core/user.ex
+lib/my_app/core/post.ex
+lib/my_app/core/...              ← one file per table
+lib/my_app/core.ex               ← Ash Domain listing all resources
+```
+
+Every resource gets `domain: MyApp.Core` set automatically. Many-to-many join tables are
+included in scope, so cross-resource references work without extra steps.
+
+**Scoped domain** (only specific tables):
+
+```bash
+mix introspex.gen.ash.resource --repo MyApp.Repo --domain Accounts --context-tables users,profiles
+```
+
+```
+lib/my_app/accounts/user.ex
+lib/my_app/accounts/profile.ex
+lib/my_app/accounts.ex           ← Ash Domain module
+```
+
+### Dry Run
+
+```bash
+mix introspex.gen.ash.resource --repo MyApp.Repo --dry-run
+```
+
+### Options
+
+- `--repo` - The repository module (required)
+- `--schema` - PostgreSQL schema name (default: "public")
+- `--table` - Generate resource for a specific table only
+- `--exclude-views` - Skip generating resources for views and materialized views
+- `--binary-id` - Use UUID primary keys (auto-detected from column type)
+- `--no-timestamps` - Do not generate `timestamps()` in resources
+- `--no-associations` - Skip detecting and generating relationships
+- `--module-prefix` - Prefix for generated module names (default: app name)
+- `--output-dir` - Output directory for resource files (default: lib/app_name)
+- `--dry-run` - Preview what would be generated without writing files
+- `--domain` - Ash Domain module name (e.g. "Core"); all tables are placed under this domain. Use `--context-tables` to limit scope.
+- `--context` - Alias for `--domain` for compatibility with Ecto task conventions
+- `--context-tables` - Comma-separated list of tables to include in the domain (optional; omit to include all tables)
+- `--path` - Custom path segment(s) to insert in the output directory
+- `--association-naming` - Naming strategy: `fk_stem`, `table_plus_stem`, `constraint` (default: `table_plus_stem`)
+- `--association-naming-apply` - When to apply: `duplicates_only`, `always` (default: `duplicates_only`)
+- `--singularize` / `--no-singularize` - Singularize module names (default: true; `users` → `User`, `user_profiles` → `UserProfile`)
+
+### many_to_many and Join Tables
+
+Ash requires `many_to_many` relationships to reference a full resource module as `through:`. Join tables are included automatically unless filtered with `--context-tables`.
+
+---
 
 ## Requirements
 

@@ -340,6 +340,63 @@ defmodule Introspex.Postgres.TypeMapper do
   end
 
   @doc """
+  Maps a PostgreSQL data type string to an Ash type atom or tuple.
+
+  Differences from `map_type/3`:
+  - `uuid` maps to `:uuid` instead of `:binary_id`
+  - `json`/`jsonb` maps to `:map` (Ash supports it natively)
+  - Enums map to `{:ash_enum, values}` (rendered as `:atom` with constraints)
+  """
+  def ash_map_type(postgres_type, enum_values \\ nil, opts \\ []) do
+    case map_type(postgres_type, enum_values, opts) do
+      :binary_id -> :uuid
+      :json_requires_manual_type -> :map
+      :jsonb_requires_manual_type -> :map
+      {:enum, values} -> {:ash_enum, values}
+      {:array, :binary_id} -> {:array, :uuid}
+      {:array, :json_requires_manual_type} -> {:array, :map}
+      {:array, :jsonb_requires_manual_type} -> {:array, :map}
+      other -> other
+    end
+  end
+
+  @doc """
+  Returns the Ash field type definition as a string for code generation.
+
+  Differences from `type_to_string/1`:
+  - `:uuid` renders as `:uuid`
+  - `{:ash_enum, values}` renders as `:atom, constraints: [one_of: [...]]`
+  - PostGIS types render as `:string` (AshPostgres PostGIS requires separate setup)
+  """
+  def ash_type_to_string(type) do
+    case type do
+      {:array, inner_type} ->
+        "{:array, #{ash_type_to_string(inner_type)}}"
+
+      {:ash_enum, values} ->
+        values_string = values |> Enum.map(&inspect/1) |> Enum.join(", ")
+        ":atom, constraints: [one_of: [#{values_string}]]"
+
+      {:geometry, _} ->
+        # PostGIS in AshPostgres requires separate extension setup
+        ":string"
+
+      {:geography, _} ->
+        ":string"
+
+      atom when is_atom(atom) ->
+        ":#{atom}"
+    end
+  end
+
+  @integer_pg_types ~w[integer bigint int4 int8 int2 smallint serial bigserial smallserial]
+
+  @doc """
+  Returns true if the PostgreSQL type is an integer-family type (including serial variants).
+  """
+  def integer_type?(postgres_type), do: postgres_type in @integer_pg_types
+
+  @doc """
   Returns a list of supported PostGIS types that require special handling.
   """
   def postgis_types do

@@ -216,7 +216,14 @@ defmodule Introspex.AshResourceBuilder do
         else: []
 
     postgres_section =
-      build_postgres_section(table.name, repo_module, check_constraints, belongs_to_rels, unique_constraints)
+      build_postgres_section(
+        table.name,
+        repo_module,
+        check_constraints,
+        belongs_to_rels,
+        unique_constraints,
+        table_type
+      )
 
     attributes_section =
       build_attributes_section(
@@ -242,7 +249,7 @@ defmodule Introspex.AshResourceBuilder do
         nil
       end
 
-    resource_section = build_resource_section(primary_keys)
+    resource_section = build_resource_section(primary_keys, table_type)
     actions_section = build_actions_section(table_type, primary_keys)
     identities_section = build_identities_section(unique_constraints)
 
@@ -269,7 +276,14 @@ defmodule Introspex.AshResourceBuilder do
     """
   end
 
-  defp build_postgres_section(table_name, repo_module, check_constraints, belongs_to_rels, unique_constraints) do
+  defp build_postgres_section(
+         table_name,
+         repo_module,
+         check_constraints,
+         belongs_to_rels,
+         unique_constraints,
+         table_type
+       ) do
     references_block =
       if belongs_to_rels != [] do
         lines =
@@ -310,7 +324,14 @@ defmodule Introspex.AshResourceBuilder do
         ""
       end
 
-    "postgres do\n    table \"#{table_name}\"\n    repo #{repo_module}#{references_block}#{identity_index_names_line}#{constraints_comment}\n  end"
+    view_block =
+      if table_type in [:view, :materialized_view] do
+        "\n    migrate? false\n    # TODO: Create this #{if table_type == :materialized_view, do: "materialized view", else: "view"} migration manually, e.g.:\n    # execute \"CREATE #{if table_type == :materialized_view, do: "MATERIALIZED VIEW", else: "VIEW"} #{table_name} AS SELECT ...\""
+      else
+        ""
+      end
+
+    "postgres do\n    table \"#{table_name}\"\n    repo #{repo_module}#{view_block}#{references_block}#{identity_index_names_line}#{constraints_comment}\n  end"
   end
 
   defp build_attributes_section(
@@ -563,9 +584,15 @@ defmodule Introspex.AshResourceBuilder do
       "many_to_many :#{assoc.field}, #{module_name} do\n      #{Enum.join(body, "\n      ")}\n    end"
   end
 
-  defp build_resource_section(primary_keys) do
+  defp build_resource_section(primary_keys, table_type) do
     if Enum.empty?(primary_keys) do
-      "resource do\n    # WARNING: Configured to bypass missing primary key.\n    # Add primary_key?: true to your attributes/relationships and remove this block.\n    require_primary_key? false\n  end"
+      warning =
+        if table_type == :table,
+          do:
+            "\n    # WARNING: Configured to bypass missing primary key.\n    # Add primary_key?: true to your attributes/relationships and remove this block.",
+          else: ""
+
+      "resource do#{warning}\n    require_primary_key? false\n  end"
     else
       nil
     end

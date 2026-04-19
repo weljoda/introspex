@@ -1132,6 +1132,37 @@ defmodule Introspex.AshResourceBuilderTest do
       refute result =~ "references do"
     end
 
+    test "emits migrate?: false and TODO comment for views" do
+      info =
+        base_table_info(%{
+          table: %{name: "user_view", type: :view, comment: nil},
+          table_type: :view
+        })
+
+      result = AshResourceBuilder.build_resource(info, "MyApp.UserView")
+      assert result =~ "migrate? false"
+      assert result =~ "# TODO: Create this view migration manually"
+      assert result =~ "CREATE VIEW user_view AS SELECT"
+    end
+
+    test "emits migrate?: false and TODO comment for materialized views" do
+      info =
+        base_table_info(%{
+          table: %{name: "user_stats", type: :materialized_view, comment: nil},
+          table_type: :materialized_view
+        })
+
+      result = AshResourceBuilder.build_resource(info, "MyApp.UserStats")
+      assert result =~ "migrate? false"
+      assert result =~ "# TODO: Create this materialized view migration manually"
+      assert result =~ "CREATE MATERIALIZED VIEW user_stats AS SELECT"
+    end
+
+    test "omits migrate?: false for regular tables" do
+      result = AshResourceBuilder.build_resource(base_table_info(), "MyApp.User")
+      refute result =~ "migrate?"
+    end
+
     test "emits identity_index_names in postgres block for unique constraints" do
       info =
         base_table_info(%{

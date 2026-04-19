@@ -216,7 +216,7 @@ defmodule Introspex.AshResourceBuilder do
         else: []
 
     postgres_section =
-      build_postgres_section(table.name, repo_module, check_constraints, belongs_to_rels)
+      build_postgres_section(table.name, repo_module, check_constraints, belongs_to_rels, unique_constraints)
 
     attributes_section =
       build_attributes_section(
@@ -269,7 +269,7 @@ defmodule Introspex.AshResourceBuilder do
     """
   end
 
-  defp build_postgres_section(table_name, repo_module, check_constraints, belongs_to_rels) do
+  defp build_postgres_section(table_name, repo_module, check_constraints, belongs_to_rels, unique_constraints) do
     references_block =
       if belongs_to_rels != [] do
         lines =
@@ -280,6 +280,20 @@ defmodule Introspex.AshResourceBuilder do
         "\n\n    references do\n#{Enum.join(lines, "\n")}\n    end"
       else
         ""
+      end
+
+    identity_index_names_line =
+      case Enum.filter(unique_constraints, &(length(&1.columns) > 0)) do
+        [] ->
+          ""
+
+        constraints ->
+          pairs =
+            Enum.map_join(constraints, ", ", fn c ->
+              "#{c.constraint_name}: \"#{c.constraint_name}\""
+            end)
+
+          "\n\n    identity_index_names [#{pairs}]"
       end
 
     constraints_comment =
@@ -296,7 +310,7 @@ defmodule Introspex.AshResourceBuilder do
         ""
       end
 
-    "postgres do\n    table \"#{table_name}\"\n    repo #{repo_module}#{references_block}#{constraints_comment}\n  end"
+    "postgres do\n    table \"#{table_name}\"\n    repo #{repo_module}#{references_block}#{identity_index_names_line}#{constraints_comment}\n  end"
   end
 
   defp build_attributes_section(
@@ -363,6 +377,7 @@ defmodule Introspex.AshResourceBuilder do
     } = column
 
     generated_always = Map.get(column, :generated_always, false)
+    has_db_default = Map.get(column, :has_db_default, false)
 
     type = TypeMapper.ash_map_type(data_type, enum_values, default: default)
     type_string = TypeMapper.ash_type_to_string(type)
@@ -371,10 +386,20 @@ defmodule Introspex.AshResourceBuilder do
 
     body_lines =
       cond do
-        is_composite_pk_col -> ["primary_key? true", "allow_nil? false"]
-        generated_always -> ["writable? false"]
-        not_null && is_nil(default) -> ["allow_nil? false"]
-        true -> []
+        is_composite_pk_col ->
+          ["primary_key? true", "allow_nil? false"]
+
+        generated_always ->
+          if not_null, do: ["writable? false", "allow_nil? false"], else: ["writable? false"]
+
+        has_db_default ->
+          if not_null, do: ["generated? true", "allow_nil? false"], else: ["generated? true"]
+
+        not_null ->
+          ["allow_nil? false"]
+
+        true ->
+          []
       end
 
     body_lines = if public, do: body_lines ++ ["public? true"], else: body_lines

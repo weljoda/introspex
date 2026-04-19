@@ -557,9 +557,9 @@ defmodule Introspex.AshResourceBuilderTest do
         })
 
       result = AshResourceBuilder.build_resource(info, "MyApp.User")
-      # has default so allow_nil? should not be added
-      assert result =~ "attribute :status, :string"
-      refute result =~ "attribute :status, :string do"
+      assert result =~ "attribute :status, :string do"
+      assert result =~ "generated? true"
+      assert result =~ "allow_nil? false"
     end
 
     test "does not emit :id as a separate attribute when using uuid_primary_key" do
@@ -646,6 +646,7 @@ defmodule Introspex.AshResourceBuilderTest do
       result = AshResourceBuilder.build_resource(info, "MyApp.User")
       assert result =~ "attribute :row_num, :integer do"
       assert result =~ "writable? false"
+      assert result =~ "allow_nil? false"
     end
   end
 
@@ -1129,6 +1130,36 @@ defmodule Introspex.AshResourceBuilderTest do
     test "omits references block when there are no belongs_to relationships" do
       result = AshResourceBuilder.build_resource(base_table_info(), "MyApp.User")
       refute result =~ "references do"
+    end
+
+    test "emits identity_index_names in postgres block for unique constraints" do
+      info =
+        base_table_info(%{
+          unique_constraints: [
+            %{constraint_name: "users_email_index", columns: ["email"]},
+            %{constraint_name: "users_name_org_index", columns: ["name", "organization_id"]}
+          ]
+        })
+
+      result = AshResourceBuilder.build_resource(info, "MyApp.User")
+      assert result =~ ~s(identity_index_names [users_email_index: "users_email_index", users_name_org_index: "users_name_org_index"])
+    end
+
+    test "omits identity_index_names when there are no unique constraints" do
+      result = AshResourceBuilder.build_resource(base_table_info(), "MyApp.User")
+      refute result =~ "identity_index_names"
+    end
+
+    test "omits identity_index_names for constraints with empty columns" do
+      info =
+        base_table_info(%{
+          unique_constraints: [
+            %{constraint_name: "broken_index", columns: []}
+          ]
+        })
+
+      result = AshResourceBuilder.build_resource(info, "MyApp.User")
+      refute result =~ "identity_index_names"
     end
 
     test "omits references block when no_associations is true" do

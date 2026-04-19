@@ -261,7 +261,9 @@ defmodule Introspex.AshResourceBuilderTest do
         })
 
       result = AshResourceBuilder.build_resource(info, "MyApp.User")
-      assert result =~ "attribute :id, :integer, primary_key?: true, allow_nil?: false"
+      assert result =~ "attribute :id, :integer do"
+      assert result =~ "primary_key? true"
+      assert result =~ "allow_nil? false"
     end
 
     test "emits uuid_primary_key for non-standard primary key name when binary_id forced" do
@@ -336,8 +338,10 @@ defmodule Introspex.AshResourceBuilderTest do
 
       result = AshResourceBuilder.build_resource(info, "MyApp.UserRole")
       refute result =~ "composite primary key"
-      assert result =~ "attribute :user_id, :integer, primary_key?: true, allow_nil?: false"
-      assert result =~ "attribute :role_id, :integer, primary_key?: true, allow_nil?: false"
+      assert result =~ "attribute :user_id, :integer do"
+      assert result =~ "attribute :role_id, :integer do"
+      assert result =~ "primary_key? true"
+      assert result =~ "allow_nil? false"
     end
 
     test "mixed composite PK: FK gets primary_key?: true on belongs_to, non-FK gets it as attribute" do
@@ -385,8 +389,8 @@ defmodule Introspex.AshResourceBuilderTest do
 
       result = AshResourceBuilder.build_resource(info, "MyApp.Membership", module_prefix: "MyApp")
       refute result =~ "composite primary key"
-      assert result =~ "primary_key?: true"
-      assert result =~ "attribute :rank, :integer, primary_key?: true, allow_nil?: false"
+      assert result =~ "primary_key? true"
+      assert result =~ "attribute :rank, :integer do"
       assert result =~ "belongs_to :user, MyApp.User"
     end
 
@@ -446,7 +450,7 @@ defmodule Introspex.AshResourceBuilderTest do
         AshResourceBuilder.build_resource(info, "MyApp.SpecialAreaOwner", module_prefix: "MyApp")
 
       refute result =~ "composite primary key"
-      assert result =~ "primary_key?: true"
+      assert result =~ "primary_key? true"
       assert result =~ "belongs_to :special_area, MyApp.SpecialArea"
       assert result =~ "belongs_to :user, MyApp.User"
     end
@@ -507,21 +511,22 @@ defmodule Introspex.AshResourceBuilderTest do
       result =
         AshResourceBuilder.build_resource(info, "MyApp.SpecialAreaOwner", module_prefix: "MyApp")
 
-      assert result =~ "source_attribute: :owner_id"
-      assert result =~ "primary_key?: true"
+      assert result =~ "source_attribute :owner_id"
+      assert result =~ "primary_key? true"
     end
   end
 
   describe "build_resource/3 - attributes" do
-    test "emits attribute with allow_nil?: false for not-null columns without defaults" do
+    test "emits attribute with allow_nil? false for not-null columns without defaults" do
       result = AshResourceBuilder.build_resource(base_table_info(), "MyApp.User")
-      assert result =~ "attribute :email, :string, allow_nil?: false"
+      assert result =~ "attribute :email, :string do"
+      assert result =~ "allow_nil? false"
     end
 
     test "emits attribute without allow_nil? for nullable columns" do
       result = AshResourceBuilder.build_resource(base_table_info(), "MyApp.User")
       assert result =~ "attribute :name, :string"
-      refute result =~ "attribute :name, :string, allow_nil?: false"
+      refute result =~ "attribute :name, :string do"
     end
 
     test "skips allow_nil?: false for not-null columns that have a default" do
@@ -554,7 +559,7 @@ defmodule Introspex.AshResourceBuilderTest do
       result = AshResourceBuilder.build_resource(info, "MyApp.User")
       # has default so allow_nil? should not be added
       assert result =~ "attribute :status, :string"
-      refute result =~ "attribute :status, :string, allow_nil?: false"
+      refute result =~ "attribute :status, :string do"
     end
 
     test "does not emit :id as a separate attribute when using uuid_primary_key" do
@@ -639,7 +644,8 @@ defmodule Introspex.AshResourceBuilderTest do
         })
 
       result = AshResourceBuilder.build_resource(info, "MyApp.User")
-      assert result =~ "attribute :row_num, :integer, writable?: false"
+      assert result =~ "attribute :row_num, :integer do"
+      assert result =~ "writable? false"
     end
   end
 
@@ -812,7 +818,7 @@ defmodule Introspex.AshResourceBuilderTest do
         })
 
       result = AshResourceBuilder.build_resource(info, "MyApp.Post", module_prefix: "MyApp")
-      assert result =~ "attribute_type: :integer"
+      assert result =~ "attribute_type :integer"
     end
 
     test "belongs_to with integer FK emits attribute_type: :integer (integer table, no binary_id)" do
@@ -879,7 +885,7 @@ defmodule Introspex.AshResourceBuilderTest do
         })
 
       result = AshResourceBuilder.build_resource(info, "MyApp.Post", module_prefix: "MyApp")
-      assert result =~ "attribute_type: :integer"
+      assert result =~ "attribute_type :integer"
     end
 
     test "belongs_to with non-standard FK name emits source_attribute" do
@@ -905,7 +911,7 @@ defmodule Introspex.AshResourceBuilderTest do
         })
 
       result = AshResourceBuilder.build_resource(info, "MyApp.Post", module_prefix: "MyApp")
-      assert result =~ "source_attribute: :created_by_user_id"
+      assert result =~ "source_attribute :created_by_user_id"
     end
 
     test "emits has_many relationship with destination_attribute" do
@@ -928,7 +934,7 @@ defmodule Introspex.AshResourceBuilderTest do
 
       result = AshResourceBuilder.build_resource(info, "MyApp.User", module_prefix: "MyApp")
       assert result =~ "has_many :posts, MyApp.Post"
-      assert result =~ "destination_attribute: :user_id"
+      assert result =~ "destination_attribute :user_id"
     end
 
     test "emits has_one relationship with destination_attribute" do
@@ -951,7 +957,7 @@ defmodule Introspex.AshResourceBuilderTest do
 
       result = AshResourceBuilder.build_resource(info, "MyApp.User", module_prefix: "MyApp")
       assert result =~ "has_one :profile, MyApp.Profile"
-      assert result =~ "destination_attribute: :user_id"
+      assert result =~ "destination_attribute :user_id"
     end
 
     test "emits many_to_many with through resource and join attributes" do
@@ -1090,6 +1096,137 @@ defmodule Introspex.AshResourceBuilderTest do
       result = AshResourceBuilder.build_resource(info, "MyApp.User")
       assert result =~ "identity :valid_index"
       refute result =~ "identity :broken_index"
+    end
+  end
+
+  describe "build_resource/3 - postgres references" do
+    test "emits references block for belongs_to relationships" do
+      info =
+        base_table_info(%{
+          relationships: %{
+            belongs_to: [
+              %{
+                field: :organization,
+                table: "organizations",
+                foreign_key: :organization_id,
+                constraint_name: "users_org_fk",
+                references: :id,
+                on_update: :no_action,
+                on_delete: :no_action
+              }
+            ],
+            has_many: [],
+            has_one: [],
+            many_to_many: []
+          }
+        })
+
+      result = AshResourceBuilder.build_resource(info, "MyApp.User", module_prefix: "MyApp")
+      assert result =~ "references do"
+      assert result =~ "reference :organization, on_delete: :nothing, on_update: :nothing"
+    end
+
+    test "omits references block when there are no belongs_to relationships" do
+      result = AshResourceBuilder.build_resource(base_table_info(), "MyApp.User")
+      refute result =~ "references do"
+    end
+
+    test "omits references block when no_associations is true" do
+      info =
+        base_table_info(%{
+          relationships: %{
+            belongs_to: [
+              %{
+                field: :organization,
+                table: "organizations",
+                foreign_key: :organization_id,
+                constraint_name: "users_org_fk",
+                references: :id,
+                on_update: :no_action,
+                on_delete: :no_action
+              }
+            ],
+            has_many: [],
+            has_one: [],
+            many_to_many: []
+          }
+        })
+
+      result = AshResourceBuilder.build_resource(info, "MyApp.User", no_associations: true)
+      refute result =~ "references do"
+    end
+  end
+
+  describe "build_resource/3 - public option" do
+    test "uuid_primary_key and integer_primary_key are already public by default, no annotation added" do
+      result = AshResourceBuilder.build_resource(base_table_info(), "MyApp.User", public: true)
+      assert result =~ "uuid_primary_key :id"
+      refute result =~ "uuid_primary_key :id, public?: true"
+    end
+
+    test "adds public? true to attributes when public: true" do
+      result = AshResourceBuilder.build_resource(base_table_info(), "MyApp.User", public: true)
+      assert result =~ "attribute :email, :string do"
+      assert result =~ "public? true"
+    end
+
+    test "adds public? true to belongs_to relationship when public: true" do
+      info =
+        base_table_info(%{
+          relationships: %{
+            belongs_to: [
+              %{
+                field: :organization,
+                table: "organizations",
+                foreign_key: :organization_id,
+                constraint_name: "users_org_fk",
+                references: :id,
+                on_update: :no_action,
+                on_delete: :no_action
+              }
+            ],
+            has_many: [],
+            has_one: [],
+            many_to_many: []
+          }
+        })
+
+      result =
+        AshResourceBuilder.build_resource(info, "MyApp.User",
+          module_prefix: "MyApp",
+          public: true
+        )
+
+      assert result =~ "belongs_to :organization, MyApp.Organization do"
+      assert result =~ "public? true"
+    end
+
+    test "adds public? true to has_many relationship when public: true" do
+      info =
+        base_table_info(%{
+          relationships: %{
+            belongs_to: [],
+            has_many: [
+              %{field: :posts, table: "posts", foreign_key: :user_id, constraint_name: nil}
+            ],
+            has_one: [],
+            many_to_many: []
+          }
+        })
+
+      result =
+        AshResourceBuilder.build_resource(info, "MyApp.User",
+          module_prefix: "MyApp",
+          public: true
+        )
+
+      assert result =~ "has_many :posts, MyApp.Post do"
+      assert result =~ "public? true"
+    end
+
+    test "omits public? true by default" do
+      result = AshResourceBuilder.build_resource(base_table_info(), "MyApp.User")
+      refute result =~ "public? true"
     end
   end
 

@@ -12,6 +12,10 @@ defmodule Introspex.AshResourceBuilder do
         postgres do
           table "users"
           repo MyApp.Repo
+
+          references do
+            reference :organization, on_delete: :nothing, on_update: :nothing
+          end
         end
 
         actions do
@@ -20,14 +24,18 @@ defmodule Introspex.AshResourceBuilder do
 
         attributes do
           uuid_primary_key :id
-          attribute :email, :string, allow_nil?: false
+          attribute :email, :string do
+            allow_nil? false
+          end
           attribute :name, :string
           timestamps()
         end
 
         relationships do
           belongs_to :organization, MyApp.Accounts.Organization
-          has_many :posts, MyApp.Blog.Post
+          has_many :posts, MyApp.Blog.Post do
+            destination_attribute :user_id
+          end
         end
 
         identities do
@@ -44,6 +52,8 @@ defmodule Introspex.AshResourceBuilder do
   - PostGIS geometry/geography types are rendered as `:string`. Configure
     `AshPostgres` PostGIS support separately.
   - JSON/JSONB fields use Ash's native `:map` type directly (no manual annotation needed).
+  - Use `public: true` opt (or `--public` CLI flag) to add `public? true` to all
+    attributes and relationships, making them visible to Ash actions by default.
   """
 
   alias Introspex.Postgres.TypeMapper
@@ -70,6 +80,7 @@ defmodule Introspex.AshResourceBuilder do
         `"constraint"` (default: `"table_plus_stem"`)
       * `:association_naming_apply` - when to apply: `"duplicates_only"`, `"always"`
         (default: `"duplicates_only"`)
+      * `:public` - add `public? true` to all attributes and relationships (default: false)
 
   Returns a string containing the complete resource module code.
   """
@@ -91,6 +102,7 @@ defmodule Introspex.AshResourceBuilder do
     domain_module = Keyword.get(opts, :domain_module)
     no_associations = Keyword.get(opts, :no_associations, false)
     singularize = Keyword.get(opts, :singularize, true)
+    public = Keyword.get(opts, :public, false)
 
     primary_key_info = detect_primary_key_type(columns, primary_keys)
 
@@ -131,7 +143,8 @@ defmodule Introspex.AshResourceBuilder do
       repo_module: repo_module,
       domain_module: domain_module,
       no_associations: no_associations,
-      singularize: singularize
+      singularize: singularize,
+      public: public
     })
   end
 
@@ -176,7 +189,8 @@ defmodule Introspex.AshResourceBuilder do
          repo_module: repo_module,
          domain_module: domain_module,
          no_associations: no_associations,
-         singularize: singularize
+         singularize: singularize,
+         public: public
        }) do
     comment_doc =
       if table.comment do
@@ -196,8 +210,13 @@ defmodule Introspex.AshResourceBuilder do
         "# domain: MyApp.MyDomain,  # specify your Ash domain\n    data_layer: AshPostgres.DataLayer"
       end
 
+    belongs_to_rels =
+      if !no_associations && table_type == :table,
+        do: Map.get(relationships, :belongs_to, []),
+        else: []
+
     postgres_section =
-      build_postgres_section(table.name, repo_module, check_constraints)
+      build_postgres_section(table.name, repo_module, check_constraints, belongs_to_rels)
 
     attributes_section =
       build_attributes_section(
@@ -205,7 +224,8 @@ defmodule Introspex.AshResourceBuilder do
         primary_keys,
         primary_key_info,
         binary_id,
-        has_timestamps
+        has_timestamps,
+        public
       )
 
     relationships_section =
@@ -215,7 +235,8 @@ defmodule Introspex.AshResourceBuilder do
           module_prefix,
           columns,
           singularize,
-          primary_keys
+          primary_keys,
+          public
         )
       else
         nil
@@ -248,7 +269,19 @@ defmodule Introspex.AshResourceBuilder do
     """
   end
 
-  defp build_postgres_section(table_name, repo_module, check_constraints) do
+  defp build_postgres_section(table_name, repo_module, check_constraints, belongs_to_rels) do
+    references_block =
+      if belongs_to_rels != [] do
+        lines =
+          Enum.map(belongs_to_rels, fn assoc ->
+            "      reference :#{assoc.field}, on_delete: :nothing, on_update: :nothing"
+          end)
+
+        "\n\n    references do\n#{Enum.join(lines, "\n")}\n    end"
+      else
+        ""
+      end
+
     constraints_comment =
       if check_constraints && length(check_constraints) > 0 do
         lines =
@@ -263,18 +296,25 @@ defmodule Introspex.AshResourceBuilder do
         ""
       end
 
-    "postgres do\n    table \"#{table_name}\"\n    repo #{repo_module}#{constraints_comment}\n  end"
+    "postgres do\n    table \"#{table_name}\"\n    repo #{repo_module}#{references_block}#{constraints_comment}\n  end"
   end
 
-  defp build_attributes_section(fields, primary_keys, primary_key_info, binary_id, has_timestamps) do
-    pk_line = build_primary_key_attribute(primary_keys, primary_key_info, binary_id)
+  defp build_attributes_section(
+         fields,
+         primary_keys,
+         primary_key_info,
+         binary_id,
+         has_timestamps,
+         public
+       ) do
+    pk_line = build_primary_key_attribute(primary_keys, primary_key_info, binary_id, public)
 
     field_lines =
       case primary_keys do
         [single_pk] -> Enum.reject(fields, &(&1.name == single_pk))
         _ -> fields
       end
-      |> Enum.map(&build_attribute_definition(&1, primary_keys))
+      |> Enum.map(&build_attribute_definition(&1, primary_keys, public))
       |> Enum.reject(&is_nil/1)
 
     timestamps_line = if has_timestamps, do: ["timestamps()"], else: []
@@ -284,13 +324,12 @@ defmodule Introspex.AshResourceBuilder do
     "attributes do\n    #{inner}\n  end"
   end
 
-  defp build_primary_key_attribute([single_pk], pk_info, binary_id) do
+  defp build_primary_key_attribute([single_pk], pk_info, binary_id, public) do
     cond do
       # UUID type or --binary-id forced: Ash generates the UUID value
       pk_info.is_uuid || binary_id ->
         "uuid_primary_key :#{single_pk}"
 
-      # Integer PK with a DB sequence: DB generates the value (generated?: true)
       pk_info.has_db_default && TypeMapper.integer_type?(pk_info.data_type) ->
         "integer_primary_key :#{single_pk}"
 
@@ -301,17 +340,20 @@ defmodule Introspex.AshResourceBuilder do
           |> TypeMapper.ash_map_type(nil, default: nil)
           |> TypeMapper.ash_type_to_string()
 
-        "attribute :#{single_pk}, #{type_str}, primary_key?: true, allow_nil?: false"
+        body =
+          ["primary_key? true", "allow_nil? false"] ++ if(public, do: ["public? true"], else: [])
+
+        "attribute :#{single_pk}, #{type_str} do\n      #{Enum.join(body, "\n      ")}\n    end"
     end
   end
 
-  defp build_primary_key_attribute(_primary_keys, _pk_info, _binary_id) do
+  defp build_primary_key_attribute(_primary_keys, _pk_info, _binary_id, _public) do
     nil
   end
 
   @uuid_gen_functions ~w[gen_random_uuid() uuid_generate_v4() uuid_generate_v1()]
 
-  defp build_attribute_definition(column, primary_keys) do
+  defp build_attribute_definition(column, primary_keys, public) do
     %{
       name: name,
       data_type: data_type,
@@ -327,19 +369,21 @@ defmodule Introspex.AshResourceBuilder do
 
     is_composite_pk_col = length(primary_keys) > 1 && name in primary_keys
 
-    opts =
+    body_lines =
       cond do
-        is_composite_pk_col -> ["primary_key?: true", "allow_nil?: false"]
-        generated_always -> ["writable?: false"]
-        not_null && is_nil(default) -> ["allow_nil?: false"]
+        is_composite_pk_col -> ["primary_key? true", "allow_nil? false"]
+        generated_always -> ["writable? false"]
+        not_null && is_nil(default) -> ["allow_nil? false"]
         true -> []
       end
 
+    body_lines = if public, do: body_lines ++ ["public? true"], else: body_lines
+
     attribute_line =
-      if opts == [] do
+      if body_lines == [] do
         "attribute :#{name}, #{type_string}"
       else
-        "attribute :#{name}, #{type_string}, #{Enum.join(opts, ", ")}"
+        "attribute :#{name}, #{type_string} do\n      #{Enum.join(body_lines, "\n      ")}\n    end"
       end
 
     if default in @uuid_gen_functions do
@@ -354,7 +398,8 @@ defmodule Introspex.AshResourceBuilder do
          module_prefix,
          columns,
          singularize,
-         primary_keys
+         primary_keys,
+         public
        ) do
     all_assoc_lists = Enum.map(@association_kinds, &Map.get(relationships, &1, []))
 
@@ -369,26 +414,27 @@ defmodule Introspex.AshResourceBuilder do
             module_prefix,
             columns,
             singularize,
-            primary_keys
+            primary_keys,
+            public
           )
         )
 
       has_many_lines =
         Enum.map(
           Map.get(relationships, :has_many, []),
-          &build_has_many_relationship(&1, module_prefix, singularize)
+          &build_has_many_relationship(&1, module_prefix, singularize, public)
         )
 
       has_one_lines =
         Enum.map(
           Map.get(relationships, :has_one, []),
-          &build_has_one_relationship(&1, module_prefix, singularize)
+          &build_has_one_relationship(&1, module_prefix, singularize, public)
         )
 
       many_to_many_lines =
         Enum.map(
           Map.get(relationships, :many_to_many, []),
-          &build_many_to_many_relationship(&1, module_prefix, singularize)
+          &build_many_to_many_relationship(&1, module_prefix, singularize, public)
         )
 
       all_lines = belongs_to_lines ++ has_many_lines ++ has_one_lines ++ many_to_many_lines
@@ -407,53 +453,58 @@ defmodule Introspex.AshResourceBuilder do
          module_prefix,
          columns,
          singularize,
-         primary_keys
+         primary_keys,
+         public
        ) do
     module_name = table_to_module(assoc.table, module_prefix, singularize)
 
-    opts =
-      if assoc.foreign_key != String.to_atom(to_string(assoc.field) <> "_id") do
-        ["source_attribute: :#{assoc.foreign_key}"]
-      else
-        []
-      end
+    body =
+      []
+      |> maybe_add(
+        assoc.foreign_key != String.to_atom(to_string(assoc.field) <> "_id"),
+        "source_attribute :#{assoc.foreign_key}"
+      )
+      |> then(fn acc ->
+        fk_column = Enum.find(columns, &(&1.name == to_string(assoc.foreign_key)))
 
-    fk_column = Enum.find(columns, &(&1.name == to_string(assoc.foreign_key)))
+        if fk_column &&
+             fk_column.data_type in ["integer", "bigint", "int4", "int8", "smallint", "int2"],
+           do: ["attribute_type :integer" | acc],
+           else: acc
+      end)
+      |> maybe_add(to_string(assoc.foreign_key) in primary_keys, "primary_key? true")
+      |> maybe_add(to_string(assoc.foreign_key) in primary_keys, "allow_nil? false")
+      |> maybe_add(public, "public? true")
+      |> Enum.reverse()
 
-    opts =
-      if fk_column &&
-           fk_column.data_type in ["integer", "bigint", "int4", "int8", "smallint", "int2"] do
-        ["attribute_type: :integer" | opts]
-      else
-        opts
-      end
-
-    opts =
-      if to_string(assoc.foreign_key) in primary_keys do
-        ["primary_key?: true", "allow_nil?: false"] ++ opts
-      else
-        opts
-      end
-
-    if opts == [] do
+    if body == [] do
       "belongs_to :#{assoc.field}, #{module_name}"
     else
-      opts_str = opts |> Enum.reverse() |> Enum.join(",\n      ")
-      "belongs_to :#{assoc.field}, #{module_name},\n      #{opts_str}"
+      "belongs_to :#{assoc.field}, #{module_name} do\n      #{Enum.join(body, "\n      ")}\n    end"
     end
   end
 
-  defp build_has_many_relationship(assoc, module_prefix, singularize) do
+  defp build_has_many_relationship(assoc, module_prefix, singularize, public) do
     module_name = table_to_module(assoc.table, module_prefix, singularize)
-    "has_many :#{assoc.field}, #{module_name}, destination_attribute: :#{assoc.foreign_key}"
+
+    body =
+      ["destination_attribute :#{assoc.foreign_key}"]
+      |> maybe_add(public, "public? true")
+
+    "has_many :#{assoc.field}, #{module_name} do\n      #{Enum.join(body, "\n      ")}\n    end"
   end
 
-  defp build_has_one_relationship(assoc, module_prefix, singularize) do
+  defp build_has_one_relationship(assoc, module_prefix, singularize, public) do
     module_name = table_to_module(assoc.table, module_prefix, singularize)
-    "has_one :#{assoc.field}, #{module_name}, destination_attribute: :#{assoc.foreign_key}"
+
+    body =
+      ["destination_attribute :#{assoc.foreign_key}"]
+      |> maybe_add(public, "public? true")
+
+    "has_one :#{assoc.field}, #{module_name} do\n      #{Enum.join(body, "\n      ")}\n    end"
   end
 
-  defp build_many_to_many_relationship(assoc, module_prefix, singularize) do
+  defp build_many_to_many_relationship(assoc, module_prefix, singularize, public) do
     module_name = table_to_module(assoc.table, module_prefix, singularize)
     through_module = table_to_module(assoc.join_through, module_prefix, singularize)
 
@@ -475,12 +526,16 @@ defmodule Introspex.AshResourceBuilder do
         do: "# TODO: verify source/destination attributes on join resource\n    ",
         else: ""
 
+    body =
+      [
+        "through #{through_module}",
+        "source_attribute_on_join_resource :#{source_attr}",
+        "destination_attribute_on_join_resource :#{dest_attr}"
+      ]
+      |> maybe_add(public, "public? true")
+
     todo_comment <>
-      "many_to_many :#{assoc.field}, #{module_name} do\n" <>
-      "      through #{through_module}\n" <>
-      "      source_attribute_on_join_resource :#{source_attr}\n" <>
-      "      destination_attribute_on_join_resource :#{dest_attr}\n" <>
-      "    end"
+      "many_to_many :#{assoc.field}, #{module_name} do\n      #{Enum.join(body, "\n      ")}\n    end"
   end
 
   defp build_resource_section(primary_keys) do
@@ -530,5 +585,9 @@ defmodule Introspex.AshResourceBuilder do
     else
       Macro.camelize(name)
     end
+  end
+
+  defp maybe_add(list, condition, item) do
+    if condition, do: list ++ [item], else: list
   end
 end

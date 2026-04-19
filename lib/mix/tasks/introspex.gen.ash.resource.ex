@@ -41,6 +41,7 @@ defmodule Mix.Tasks.Introspex.Gen.Ash.Resource do
     * `--association-naming` - naming strategy: fk_stem, table_plus_stem, constraint (default: table_plus_stem)
     * `--association-naming-apply` - when to apply: duplicates_only, always (default: duplicates_only)
     * `--singularize` - singularize module names to match Elixir conventions (default: true; use `--no-singularize` to keep plural names)
+    * `--public` - add `public? true` to all generated attributes and relationships (default: false; use `--no-public` to omit)
 
   ## Association Naming
 
@@ -91,7 +92,8 @@ defmodule Mix.Tasks.Introspex.Gen.Ash.Resource do
     path: :string,
     association_naming: :string,
     association_naming_apply: :string,
-    singularize: :boolean
+    singularize: :boolean,
+    public: :boolean
   ]
 
   @impl Mix.Task
@@ -248,7 +250,8 @@ defmodule Mix.Tasks.Introspex.Gen.Ash.Resource do
       domain_module: domain_module,
       association_naming: Keyword.get(opts, :association_naming, "table_plus_stem"),
       association_naming_apply: Keyword.get(opts, :association_naming_apply, "duplicates_only"),
-      singularize: Keyword.get(opts, :singularize, true)
+      singularize: Keyword.get(opts, :singularize, true),
+      public: Keyword.get(opts, :public, false)
     ]
 
     resource_content = AshResourceBuilder.build_resource(table_data, module_name, builder_opts)
